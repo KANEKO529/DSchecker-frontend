@@ -6,12 +6,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import {
   Home,
-  Search,
-  Info,
-  FileText,
-  MessageSquare,
   Menu,
-  BookOpen
 } from 'lucide-react'
 
 const SideBar = () => {
@@ -44,7 +39,7 @@ const SideBar = () => {
         {/* サイドバー上部：メニュー */}
         <div>
           {/* ヘッダー部分 */}
-          <div className="flex items-center justify-between p-4 border-b bg-yellow-400 h-16">
+          <div className="flex items-center justify-between p-4 border-b bg-[#f9fafb] h-16">
             <div className="flex items-center gap-2">
               <button onClick={closeAll} className="p-1">
                 <Menu className="h-5 w-5 text-gray-900" />
