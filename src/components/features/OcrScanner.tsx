@@ -22,6 +22,7 @@ export default function OcrScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const captureCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const viewportRef = useRef<HTMLDivElement | null>(null)
 
   const [streamReady, setStreamReady] = useState(false)
   const [zoom, setZoom] = useState(1)
@@ -135,13 +136,20 @@ export default function OcrScanner() {
     const video = videoRef.current
     const captureCanvas = captureCanvasRef.current
     const previewCanvas = previewCanvasRef.current
+    const viewport = viewportRef.current
   
-    if (!video || !captureCanvas || !previewCanvas) return null
+    if (!video || !captureCanvas || !previewCanvas || !viewport) return null
     if (!video.videoWidth || !video.videoHeight) return null
   
     const sourceWidth = video.videoWidth
     const sourceHeight = video.videoHeight
   
+    const viewportWidth = viewport.clientWidth
+    const viewportHeight = viewport.clientHeight
+  
+    if (!viewportWidth || !viewportHeight) return null
+  
+    // 元の動画を brightness 反映込みで captureCanvas に描画
     captureCanvas.width = sourceWidth
     captureCanvas.height = sourceHeight
   
@@ -152,37 +160,57 @@ export default function OcrScanner() {
     captureCtx.filter = `brightness(${brightness}%)`
     captureCtx.drawImage(video, 0, 0, sourceWidth, sourceHeight)
   
-    const baseCropX = sourceWidth * cropRect.xRatio
-    const baseCropY = sourceHeight * cropRect.yRatio
-    const baseCropWidth = sourceWidth * cropRect.widthRatio
-    const baseCropHeight = sourceHeight * cropRect.heightRatio
+    // object-cover の表示サイズを算出
+    const videoAspect = sourceWidth / sourceHeight
+    const viewportAspect = viewportWidth / viewportHeight
   
-    const centerX = baseCropX + baseCropWidth / 2
-    const centerY = baseCropY + baseCropHeight / 2
+    let displayedWidth = 0
+    let displayedHeight = 0
   
-    const zoomedCropWidth = baseCropWidth / zoom
-    const zoomedCropHeight = baseCropHeight / zoom
+    if (videoAspect > viewportAspect) {
+      displayedHeight = viewportHeight
+      displayedWidth = displayedHeight * videoAspect
+    } else {
+      displayedWidth = viewportWidth
+      displayedHeight = displayedWidth / videoAspect
+    }
   
-    let cropX = Math.floor(centerX - zoomedCropWidth / 2)
-    let cropY = Math.floor(centerY - zoomedCropHeight / 2)
-    let cropWidth = Math.floor(zoomedCropWidth)
-    let cropHeight = Math.floor(zoomedCropHeight)
+    // CSS transform: scale(zoom) を反映
+    displayedWidth *= zoom
+    displayedHeight *= zoom
+  
+    // 中央基準でどれだけはみ出しているか
+    const offsetX = (displayedWidth - viewportWidth) / 2
+    const offsetY = (displayedHeight - viewportHeight) / 2
+  
+    // 画面上の赤枠位置（viewport基準）
+    const frameX = viewportWidth * cropRect.xRatio
+    const frameY = viewportHeight * cropRect.yRatio
+    const frameWidth = viewportWidth * cropRect.widthRatio
+    const frameHeight = viewportHeight * cropRect.heightRatio
+  
+    // viewport座標 -> source video座標へ変換
+    const scaleX = sourceWidth / displayedWidth
+    const scaleY = sourceHeight / displayedHeight
+  
+    let cropX = Math.floor((frameX + offsetX) * scaleX)
+    let cropY = Math.floor((frameY + offsetY) * scaleY)
+    let cropWidth = Math.floor(frameWidth * scaleX)
+    let cropHeight = Math.floor(frameHeight * scaleY)
   
     // はみ出し防止
     cropX = Math.max(0, Math.min(cropX, sourceWidth - cropWidth))
     cropY = Math.max(0, Math.min(cropY, sourceHeight - cropHeight))
+    cropWidth = Math.max(1, Math.min(cropWidth, sourceWidth - cropX))
+    cropHeight = Math.max(1, Math.min(cropHeight, sourceHeight - cropY))
   
-    // 出力サイズは元の枠サイズで固定
-    const outputWidth = Math.floor(baseCropWidth)
-    const outputHeight = Math.floor(baseCropHeight)
-  
-    previewCanvas.width = outputWidth
-    previewCanvas.height = outputHeight
+    previewCanvas.width = cropWidth
+    previewCanvas.height = cropHeight
   
     const previewCtx = previewCanvas.getContext('2d')
     if (!previewCtx) return null
   
-    previewCtx.clearRect(0, 0, outputWidth, outputHeight)
+    previewCtx.clearRect(0, 0, cropWidth, cropHeight)
     previewCtx.drawImage(
       captureCanvas,
       cropX,
@@ -191,8 +219,8 @@ export default function OcrScanner() {
       cropHeight,
       0,
       0,
-      outputWidth,
-      outputHeight
+      cropWidth,
+      cropHeight
     )
   
     return previewCanvas.toDataURL('image/png')
@@ -258,6 +286,7 @@ export default function OcrScanner() {
     <div className="bg-white">
       <div className="relative w-full overflow-hidden bg-black">
         <div
+            ref={viewportRef}
             className="relative mx-auto h-[calc(100vh-164px)] w-full max-w-xl bg-black touch-none"
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
