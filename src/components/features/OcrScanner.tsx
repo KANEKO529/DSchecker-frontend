@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Tesseract from 'tesseract.js'
+import { Sun, X } from 'lucide-react'
 import { searchByModelNumber } from '@/src/api/v1/ocr'
 import Footer from '../layouts/Footer'
 
@@ -35,8 +36,9 @@ export default function OcrScanner() {
   const pinchStartZoomRef = useRef<number>(1)
 
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [showBrightnessControl, setShowBrightnessControl] = useState(false)
 
-    const flashScanStatus = (status: 'success' | 'error') => {
+  const flashScanStatus = (status: 'success' | 'error') => {
     setScanStatus(status)
 
     if (statusTimerRef.current) {
@@ -82,11 +84,16 @@ export default function OcrScanner() {
   }
 
   const cropRect = {
-    xRatio: 0.1,
-    yRatio: 0.38,
-    widthRatio: 0.8,
-    heightRatio: 0.16,
+    xRatio: 0.18,
+    yRatio: 0.40,
+    widthRatio: 0.64,
+    heightRatio: 0.10,
   }
+
+  useEffect(() => {
+    if (!streamReady) return
+    drawCropPreview()
+  }, [brightness, zoom, streamReady])
 
   useEffect(() => {
     let currentStream: MediaStream | null = null
@@ -313,14 +320,15 @@ export default function OcrScanner() {
             autoPlay
             playsInline
             muted
+            onLoadedMetadata={() => drawCropPreview()}
             className="absolute inset-0 h-full w-full object-cover"
             style={{
                 transform: `scale(${zoom})`,
                 transformOrigin: 'center center',
                 filter: `brightness(${brightness}%)`,
             }}
-          />
-  
+         />
+            {/* 読み取り枠ブロック*/}
             <div
                 className={`
                     pointer-events-none absolute rounded-lg border-4 transition-all duration-300
@@ -339,7 +347,7 @@ export default function OcrScanner() {
                     height: `${cropRect.heightRatio * 100}%`,
                 }}
             />
-  
+            {/* エラー表示とスキャンボタンブロック */}
             <div className="absolute bottom-10 left-0 right-0 z-10 px-4">
 
                 {error && (
@@ -350,17 +358,48 @@ export default function OcrScanner() {
                 </div>
                 )}
 
-            <div className="flex justify-center">
-            <button
-                type="button"
-                onClick={handleScan}
-                disabled={!streamReady || isScanning}
-                className="w-40 max-w-md rounded-xl bg-blue-600 py-4 text-xl font-bold text-white shadow-lg disabled:opacity-50"
-            >
-                {isScanning ? 'スキャン中...' : 'スキャン'}
-            </button>
+                <div className="flex justify-center">
+                    
+                <button
+                    type="button"
+                    onClick={handleScan}
+                    disabled={!streamReady || isScanning}
+                    className="w-40 max-w-md rounded-xl bg-blue-600 py-4 text-xl font-bold text-white shadow-lg disabled:opacity-50"
+                >
+                    {isScanning ? 'スキャン中...' : 'スキャン'}
+                </button>
+                </div>
+
             </div>
 
+            {/* 明るさ調整ブロック */}
+            <div className="absolute bottom-10 right-6 z-20 flex flex-col items-center gap-3">
+                {showBrightnessControl && (
+                    <div className="flex h-44 w-14 items-center justify-center rounded-2xl bg-black/60 backdrop-blur-sm">
+                    <input
+                        type="range"
+                        min={50}
+                        max={180}
+                        step={1}
+                        value={brightness}
+                        onChange={(e) => setBrightness(Number(e.target.value))}
+                        className="h-32 w-32 cursor-pointer accent-yellow-400"
+                        style={{
+                        transform: 'rotate(-90deg)',
+                        }}
+                        aria-label="明るさ調整"
+                    />
+                    </div>
+                )}
+
+                <button
+                    type="button"
+                    onClick={() => setShowBrightnessControl((prev) => !prev)}
+                    className="flex h-14 w-14 items-center justify-center rounded-full bg-black/70 text-white shadow-lg backdrop-blur-sm transition hover:bg-black/80"
+                    aria-label="明るさ調整を開く"
+                >
+                    {showBrightnessControl ? <X size={22} /> : <Sun size={22} />}
+                </button>
             </div>
         </div>
       </div>
