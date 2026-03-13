@@ -1,10 +1,10 @@
 // src/api/v1/ocr.js
 
-import client from './client';
+import {client_kotodb} from './client';
 
 export const searchByModelNumber = async (modelNumber) => {
   try {
-    const response = await client.post('/api/v1/items/search_by_model_number', {
+    const response = await client_kotodb.post('/api/v1/items/search_by_model_number', {
       model_number: modelNumber,
     });
 

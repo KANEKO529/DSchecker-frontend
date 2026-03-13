@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Tesseract from 'tesseract.js'
-import { Sun, X } from 'lucide-react'
+import { Sun, X,  History, Trash2} from 'lucide-react'
 import { searchByModelNumber } from '@/src/api/v1/ocr'
 import Footer from '../layouts/Footer'
 
@@ -17,6 +17,17 @@ type SearchItem = {
   marketPrice?: number | null
   description?: string | null
 }
+
+type ScanHistoryItem = {
+    modelNumber: string
+    itemName: string
+    marketPrice: number | null
+    scannedAt: string
+    merkariUrl?: string | null
+}
+  
+const SCAN_HISTORY_KEY = 'dschecker_scan_history'
+const MAX_HISTORY_COUNT = 10
 
 export default function OcrScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -38,6 +49,8 @@ export default function OcrScanner() {
 
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [showBrightnessControl, setShowBrightnessControl] = useState(false)
+  const [historyItems, setHistoryItems] = useState<ScanHistoryItem[]>([])
+  const [showHistoryPanel, setShowHistoryPanel] = useState(false)
 
   const flashScanStatus = (status: 'success' | 'error') => {
     setScanStatus(status)
@@ -90,6 +103,65 @@ export default function OcrScanner() {
     widthRatio: 0.64,
     heightRatio: 0.10,
   }
+
+  const loadScanHistory = (): ScanHistoryItem[] => {
+    try {
+      const raw = localStorage.getItem(SCAN_HISTORY_KEY)
+      if (!raw) return []
+
+      const parsed = JSON.parse(raw)
+
+      if (!Array.isArray(parsed)) return []
+
+      return parsed.filter((item) => {
+        return (
+          item &&
+          typeof item.modelNumber === 'string' &&
+          typeof item.itemName === 'string' &&
+          typeof item.scannedAt === 'string'
+        )
+      })
+    } catch (err) {
+      console.error('履歴の読み込みに失敗しました', err)
+      return []
+    }
+  }
+
+  const saveScanHistory = (newItem: ScanHistoryItem) => {
+    try {
+      const currentHistory = loadScanHistory()
+
+      const filteredHistory = currentHistory.filter(
+        (item) => item.modelNumber !== newItem.modelNumber
+      )
+
+      const updatedHistory = [newItem, ...filteredHistory].slice(0, MAX_HISTORY_COUNT)
+
+      localStorage.setItem(SCAN_HISTORY_KEY, JSON.stringify(updatedHistory))
+      setHistoryItems(updatedHistory)
+    } catch (err) {
+      console.error('履歴の保存に失敗しました', err)
+    }
+  }
+
+  const clearScanHistory = () => {
+    const confirmed = window.confirm('履歴をすべて削除しますか？')
+  
+    if (!confirmed) return
+  
+    try {
+      localStorage.removeItem(SCAN_HISTORY_KEY)
+      setHistoryItems([])
+      setShowHistoryPanel(false)
+    } catch (err) {
+      console.error('履歴削除に失敗しました', err)
+    }
+  }
+
+  useEffect(() => {
+    const savedHistory = loadScanHistory()
+    setHistoryItems(savedHistory)
+  }, [])
 
   useEffect(() => {
     if (!streamReady) return
@@ -266,6 +338,16 @@ export default function OcrScanner() {
       console.log('検索結果', apiResult)
 
       setSearchResult(apiResult.data)
+
+      saveScanHistory({
+        modelNumber: normalized,
+        itemName: apiResult.data.itemName,
+        marketPrice: apiResult.data.marketPrice ?? null,
+        scannedAt: new Date().toISOString(),
+      })
+
+      setShowHistoryPanel(true)
+      
       flashScanStatus('success')
       
     } catch (err: any) {
@@ -292,58 +374,68 @@ export default function OcrScanner() {
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
         >
-          <div
+            <div
             className={`
-              absolute top-0 left-0 right-0 z-20 px-3 pt-3
-              transition-transform duration-300 ease-in-out
-              ${searchResult ? 'translate-y-0' : '-translate-y-full'}
+                absolute top-0 left-0 right-0 z-20 pl-18 pr-2 pt-2
+                transition-transform duration-300 ease-in-out
+                ${showHistoryPanel && historyItems.length > 0 ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0'}
             `}
-          >
-            {searchResult && (
-              <div className="rounded-2xl border border-gray-200 bg-white/95 p-4 shadow-xl backdrop-blur-sm">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-md break-words font-bold text-gray-900">
-                      {searchResult.itemName}
-                    </p>
-  
-                    <div className="mt-3 space-y-1 text-xs text-gray-600">
-                      <p>
-                        <span className="font-medium text-gray-800">型番:</span>{' '}
-                        {searchResult.modelNumber}
-                      </p>
-                      <p>
-                        <span className="font-medium text-gray-800">定価:</span>{' '}
-                        {searchResult.regularPrice ?? '不明'}
-                      </p>
-                    </div>
-                  </div>
-  
-                  <div className="shrink-0 rounded-xl bg-blue-50 px-2 py-3 text-right">
-                    <p className="text-xs font-semibold tracking-wide text-blue-600">
-                      中古相場
-                    </p>
-                    <p className="mt-1 text-2xl font-bold text-blue-700">
-                      {searchResult.marketPrice ?? '不明'}円
-                    </p>
-  
-                    <a
-                      href={
-                        searchResult.merkariUrl ??
-                        `https://jp.mercari.com/search?keyword=${encodeURIComponent(searchResult.itemName)}`
-                      }
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-3 inline-block rounded-lg bg-red-500 px-3 py-2 text-sm font-semibold text-white transition hover:bg-red-600"
+            >
+            {historyItems.length > 0 && (
+                <div className="overflow-x-auto">
+                <div className="flex w-max gap-2 pb-2">
+                    {historyItems.map((item) => (
+                    <div
+                        key={`${item.modelNumber}-${item.scannedAt}`}
+                        className="min-w-[260px] max-w-[260px] shrink-0 rounded-xl border border-gray-200 bg-white/95 p-2 shadow-xl backdrop-blur-sm"
                     >
-                      メルカリを見る
-                    </a>
-                  </div>
+                        <div className="flex h-full flex-col justify-between">
+                            <div>
+                                <p className="line-clamp-2 text-sm font-bold text-gray-900">
+                                {item.itemName}
+                                </p>
+
+                                <div className="mt-1 space-y-1 text-[10px] text-gray-600">
+                                <p>
+                                    <span className="font-medium text-gray-800">型番:</span>{' '}
+                                    {item.modelNumber}
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-between rounded-xl bg-blue-50 px-2 py-[2px]">
+                            <div>
+                                <p className="text-[8px] text-gray-800 font-semibold tracking-wide text-blue-600">
+                                中古相場
+                                </p>
+
+                                <p className="text-xl font-bold text-blue-700">
+                                {item.marketPrice != null ? `${item.marketPrice}円` : '不明'}
+                                </p>
+                            </div>
+
+                            <a
+                                href={`https://jp.mercari.com/search?keyword=${encodeURIComponent(item.itemName)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="shrink-0 rounded-lg bg-red-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-red-600"
+                            >
+                                メルカリで見る
+                            </a>
+
+                            </div>
+                        {/* <p>
+                            <span className="font-medium text-gray-800">読取時刻:</span>{' '}
+                            {new Date(item.scannedAt).toLocaleString('ja-JP')}
+                        </p> */}
+                        </div>
+                    </div>
+                    ))}
                 </div>
-              </div>
+                </div>
             )}
-          </div>
-  
+            </div>
+            
           <video
             ref={videoRef}
             autoPlay
@@ -357,6 +449,29 @@ export default function OcrScanner() {
                 filter: `brightness(${brightness}%)`,
             }}
          />
+            <div className="absolute top-3 left-3 z-30 flex flex-col gap-6">
+                {/* 履歴開閉 */}
+                <button
+                type="button"
+                onClick={() => setShowHistoryPanel((prev) => !prev)}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/70 text-white shadow-lg backdrop-blur-sm transition hover:bg-black/80"
+                >
+                {showHistoryPanel ? <X size={22} /> : <History size={22} />}
+                </button>
+
+                {/* 履歴削除 */}
+                {showHistoryPanel && historyItems.length > 0 && (
+                <button
+                    type="button"
+                    onClick={clearScanHistory}
+                    className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/90 text-white shadow-lg backdrop-blur-sm transition hover:bg-red-600"
+                    aria-label="履歴削除"
+                >
+                    <Trash2 size={20} />
+                </button>
+                )}
+            </div>
+
             {/* 読み取り枠ブロック*/}
             <div
                 className={`
