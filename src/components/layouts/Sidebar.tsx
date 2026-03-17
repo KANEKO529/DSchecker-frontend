@@ -7,13 +7,26 @@ import Image from 'next/image'
 import {
   Home,
   Menu,
+  LogIn,
+  LogOut
 } from 'lucide-react'
+import { useUser, useClerk } from "@clerk/nextjs";
 
 const SideBar = () => {
   const { menuOpen, toggleMenu, closeAll } = useSidebar()
+  const { user, isSignedIn, isLoaded  } = useUser();
+  const { signOut } = useClerk();
+
+  const displayName =
+    user?.username ||
+    user?.primaryEmailAddress?.emailAddress?.split('@')[0] ||
+    "ユーザー";
 
   const menuItems = [
     { icon: Home, label: 'ホーム', href: '/' },
+    ...(!isSignedIn
+      ? [{ icon: LogIn, label: 'サインイン', href: '/auth/sign-in' }]
+      : []),
   ]
 
   return (
@@ -46,7 +59,14 @@ const SideBar = () => {
               </button>
               <span className="font-bold text-gray-900">DSchecker</span>
             </div>
+
+    
           </div>
+          {isLoaded && isSignedIn && (
+            <div className="px-4 py-2 bg-gray-50 border-b text-sm text-gray-600 text-xs">
+              ようこそ <span className="font-semibold text-gray-900 text-sm">{displayName}</span> さん
+            </div>
+          )}
 
           {/* メニューリスト */}
           <nav className="p-4">
@@ -94,6 +114,17 @@ const SideBar = () => {
             </a>
           </div>
 
+          {/* サインアウトボタン（ログイン時のみ） */}
+          {isSignedIn && (
+            <button
+              onClick={() => signOut()}
+              className="mt-4 flex items-center justify-center gap-2 w-full py-2 text-sm text-red-600 hover:bg-red-50 rounded-md transition"
+            >
+              <LogOut className="h-4 w-4" />
+              サインアウト
+            </button>
+          )}
+                    
           {/* サイト名 */}
           <span className="text-xs text-gray-500 mt-1">DSchecker</span>
         </div>
