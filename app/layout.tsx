@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import ClientWrapper from '../src/components/layouts/ClientWrapper'
 import Footer from "@/src/components/layouts/Footer";
+import { ClerkProvider } from '@clerk/nextjs'
 
 import type { Viewport } from 'next'
 
@@ -39,7 +40,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <ClientWrapper>{children}</ClientWrapper>
+        <ClerkProvider>
+          <ClientWrapper>{children}</ClientWrapper>
+        </ClerkProvider>
       </body>
     </html>
   );

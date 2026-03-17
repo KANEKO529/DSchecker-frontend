@@ -3,6 +3,9 @@
 import {client_kotodb} from './client';
 
 export const searchByModelNumber = async (modelNumber) => {
+
+//   console.log(client_kotodb.defaults.baseURL)
+
   try {
     const response = await client_kotodb.post('/api/v1/items/search_by_model_number', {
       model_number: modelNumber,
