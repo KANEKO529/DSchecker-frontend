@@ -24,6 +24,7 @@ const SideBar = () => {
 
   const menuItems = [
     { icon: Home, label: 'ホーム', href: '/' },
+    { icon: Home, label: 'マイページ', href: '/mypage' },
     ...(!isSignedIn
       ? [{ icon: LogIn, label: 'サインイン', href: '/auth/sign-in' }]
       : []),
