@@ -3,15 +3,25 @@
 import { useEffect, useState } from 'react'
 import { useAuth, useUser } from '@clerk/nextjs'
 import { getMe } from '@/src/api/v1/me'
+import {createCheckoutSession} from '@/src/api/v1/billing'
 
 type MeResponse = {
-  status: string
-  data?: {
-    clerk_user_id?: string
-    session_id?: string
+    status: string
+    data?: {
+      user: {
+        id: number
+        clerk_user_id: string
+        role: string
+        user_name: string | null
+        email: string | null
+        status: string
+        created_at: string
+        updated_at: string
+        deleted_at: string | null
+      }
+    }
+    error?: string
   }
-  error?: string
-}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -71,6 +81,27 @@ export default function MyPage() {
     fetchMe()
   }, [isLoaded, isSignedIn, getToken])
 
+  const handleSubscribe = async () => {
+    try {
+      const token = await getToken({ skipCache: true })
+
+      if (!token) {
+        throw new Error('トークンを取得できませんでした')
+      }
+
+      const data = await createCheckoutSession(token)
+
+      if (data.checkoutUrl) {
+        window.location.href = data.checkoutUrl
+      } else {
+        throw new Error('checkout_url が返ってきませんでした')
+      }
+    } catch (error) {
+      console.error('failed to create checkout session:', error)
+      setError(error instanceof Error ? error.message : 'checkout session error')
+    }
+  }
+
   if (loading) {
     return <main className="p-6 text-white">読み込み中...</main>
   }
@@ -104,6 +135,13 @@ export default function MyPage() {
       <pre className="mt-6 rounded bg-gray-900 p-4 text-sm whitespace-pre-wrap">
         {JSON.stringify(result, null, 2)}
       </pre>
+
+      <button
+        onClick={handleSubscribe}
+        className="mt-6 rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+        >
+        Proプランに登録する
+      </button>
     </main>
   )
 }
