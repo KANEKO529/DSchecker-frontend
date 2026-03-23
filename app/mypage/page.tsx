@@ -2,26 +2,28 @@
 
 import { useEffect, useState } from 'react'
 import { useAuth, useUser } from '@clerk/nextjs'
+import { AxiosError } from 'axios'
 import { getMe } from '@/src/api/v1/me'
-import {createCheckoutSession} from '@/src/api/v1/billing'
+import { createCheckoutSession } from '@/src/api/v1/billing'
+import MySubscription from '@/src/components/features/MySubscription'
 
 type MeResponse = {
-    status: string
-    data?: {
-      user: {
-        id: number
-        clerk_user_id: string
-        role: string
-        user_name: string | null
-        email: string | null
-        status: string
-        created_at: string
-        updated_at: string
-        deleted_at: string | null
-      }
+  status: string
+  data?: {
+    user: {
+      id: number
+      clerkUserId: string
+      role: string
+      userName: string | null
+      email: string | null
+      status: string
+      createdAt: string
+      updatedAt: string
+      deletedAt: string | null
     }
-    error?: string
   }
+  error?: string
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -83,8 +85,9 @@ export default function MyPage() {
 
   const handleSubscribe = async () => {
     try {
-      const token = await getToken({ skipCache: true })
+      setError(null)
 
+      const token = await getToken({ skipCache: true })
       if (!token) {
         throw new Error('トークンを取得できませんでした')
       }
@@ -93,12 +96,29 @@ export default function MyPage() {
 
       if (data.checkoutUrl) {
         window.location.href = data.checkoutUrl
-      } else {
-        throw new Error('checkout_url が返ってきませんでした')
+        return
       }
-    } catch (error) {
-      console.error('failed to create checkout session:', error)
-      setError(error instanceof Error ? error.message : 'checkout session error')
+
+      throw new Error('checkout_url が返ってきませんでした')
+    } catch (err) {
+      console.error('failed to create checkout session:', err)
+
+      if (err instanceof AxiosError) {
+        if (err.response?.status === 409) {
+          setError('すでにサブスクリプション登録済みです')
+          return
+        }
+
+        if (err.response?.status === 401) {
+          setError('ログイン状態を確認してください')
+          return
+        }
+
+        setError('チェックアウトセッションの作成に失敗しました')
+        return
+      }
+
+      setError(err instanceof Error ? err.message : 'checkout session error')
     }
   }
 
@@ -128,8 +148,7 @@ export default function MyPage() {
 
       <div className="rounded bg-gray-900 p-4 space-y-2">
         <p>Clerk User ID: {user?.id ?? 'なし'}</p>
-        <p>Go側 clerk_user_id: {result?.data?.clerkUserId ?? 'なし'}</p>
-        <p>Session ID: {result?.data?.sessionId ?? 'なし'}</p>
+        <p>Go側 clerk_user_id: {result?.data?.user?.clerkUserId ?? 'なし'}</p>
       </div>
 
       <pre className="mt-6 rounded bg-gray-900 p-4 text-sm whitespace-pre-wrap">
@@ -139,9 +158,11 @@ export default function MyPage() {
       <button
         onClick={handleSubscribe}
         className="mt-6 rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
-        >
+      >
         Proプランに登録する
       </button>
+
+      <MySubscription />
     </main>
   )
 }
