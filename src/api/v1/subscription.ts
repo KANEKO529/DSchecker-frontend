@@ -13,3 +13,29 @@ export const getMySubscription = async (token: string) => {
 
   return res.data;
 };
+
+export const cancelMySubscription = async (token: string) => {
+  const res = await client_dschecker.post(
+    '/api/v1/me/subscription/cancel',
+    {},
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+  return res.data;
+};
+
+export const resumeMySubscription = async (token: string) => {
+  const res = await client_dschecker.post(
+    '/api/v1/me/subscription/resume',
+    {},
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+  return res.data;
+};
