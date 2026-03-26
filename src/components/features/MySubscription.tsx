@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@clerk/nextjs';
 import { AxiosError } from 'axios';
 import { getMySubscription, cancelMySubscription, resumeMySubscription } from '@/src/api/v1/subscription';
-import { createCheckoutSession } from '@/src/api/v1/billing';
+import { createCheckoutSession, getMyPaymentMethod } from '@/src/api/v1/billing';
 
 type Subscription = {
   stripePriceId: string;
@@ -18,9 +18,18 @@ type Subscription = {
   endedAt?: string;
 } | null;
 
+type PaymentMethod = {
+  id: string;
+  brand: string;
+  last4: string;
+  expMonth: number;
+  expYear: number;
+} | null;
+
 const MySubscription = () => {
   const { getToken, isSignedIn, isLoaded } = useAuth();
   const [subscription, setSubscription] = useState<Subscription>(null);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(null);
   const [processing, setProcessing] = useState(false);
 
   const [loading, setLoading] = useState(true);
@@ -55,7 +64,42 @@ const MySubscription = () => {
       }
     };
 
+    const fetchPaymentMethod = async () => {
+      if (!isLoaded) return;
+    
+      try {
+        if (!isSignedIn) {
+          setPaymentMethod(null);
+          return;
+        }
+    
+        const token = await getToken({ skipCache: true });
+        if (!token) {
+          throw new Error('token not found');
+        }
+    
+        const res = await getMyPaymentMethod(token);
+        const pm = res.data.paymentMethod;
+    
+        if (!pm) {
+          setPaymentMethod(null);
+          return;
+        }
+    
+        setPaymentMethod({
+          id: pm.id,
+          brand: pm.brand,
+          last4: pm.last4,
+          expMonth: pm.expMonth,
+          expYear: pm.expYear,
+        });
+      } catch (err) {
+        console.error('Failed to fetch payment method', err);
+      }
+    };
+
     fetchSubscription();
+    fetchPaymentMethod();
   }, [getToken, isSignedIn, isLoaded]);
 
   const handleSubscribe = async () => {
@@ -69,11 +113,17 @@ const MySubscription = () => {
 
       const data = await createCheckoutSession(token);
 
-      if (data.checkoutUrl) {
-        window.location.href = data.checkoutUrl;
+      console.log("data:", data)
+      const checkoutUrl = data?.data.checkoutUrl;
+
+      console.log("checkoutUrl:", checkoutUrl)
+
+      
+      if (checkoutUrl) {
+        window.location.href = checkoutUrl;
         return;
       }
-
+      
       throw new Error('checkout_url が返ってきませんでした');
     } catch (err) {
       console.error('failed to create checkout session:', err);
@@ -202,9 +252,32 @@ const MySubscription = () => {
   !subscription.isActive &&
   (subscription.status === 'canceled' || !!subscription.endedAt || !!subscription.canceledAt);
 
+  const formatDate = (date?: string | null) => {
+    if (!date) return "-";
+    return new Date(date).toLocaleDateString("ja-JP");
+  };
+
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case 'active':
+        return '有効';
+      case 'trialing':
+        return 'トライアル中';
+      case 'canceled':
+        return '解約済み';
+      case 'past_due':
+        return '支払い未完了';
+      case 'unpaid':
+        return '未払い';
+      default:
+        return status;
+    }
+  };
+
   if (!isLoaded || loading) {
     return <div className="text-gray-900">Loading...</div>;
   }
+
   return (
     <div className="mt-6 text-gray-900">
       <h2 className="mb-2 text-lg font-semibold">サブスクリプション</h2>
@@ -223,34 +296,57 @@ const MySubscription = () => {
         </div>
       ) : subscription.isActive ? (
         <div>
-          <p>有料プラン</p>
-          <p>ステータス: {subscription.status}</p>
-  
-          {subscription.cancelAtPeriodEnd && subscription.currentPeriodEnd && (
-            <p>※{new Date(subscription.currentPeriodEnd).toLocaleDateString()}に解約予定</p>
-          )}
-  
           {subscription.cancelAtPeriodEnd ? (
-            <button
-              onClick={handleResumeSubscribe}
-              disabled={processing}
-              className="mt-4 rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400"
-            >
-              {processing ? '処理中...' : '解約を取り消す'}
-            </button>
+            <div>
+              <p>Proプラン利用中</p>
+              <p>ステータス: 解約予定</p>
+              <p>解約申請日: {formatDate(subscription.canceledAt)}</p>
+              <p>解約予定日: {formatDate(subscription.currentPeriodEnd)}</p>
+              <button
+                onClick={handleResumeSubscribe}
+                disabled={processing}
+                className="mt-4 rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+              >
+                {processing ? '処理中...' : '解約を取り消す'}
+              </button>
+            </div>
           ) : (
-            <button
-              onClick={handleCancelSubscribe}
-              disabled={processing}
-              className="mt-4 rounded bg-red-600 px-4 py-2 text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-400"
-            >
-              {processing ? '解約中...' : 'Proプランを解約する'}
-            </button>
+            <div>
+              <p>Proプラン利用中</p>
+              <p>ステータス: {getStatusLabel(subscription.status)}</p>
+
+              {paymentMethod ? (
+                <div className="mt-4">
+                  <p>支払い方法</p>
+                  <p>
+                    {paymentMethod.brand.toUpperCase()} **** {paymentMethod.last4}
+                  </p>
+                  <p>
+                    有効期限: {paymentMethod.expMonth}/{paymentMethod.expYear}
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-4">
+                  <p>支払い方法は未登録です</p>
+                </div>
+              )}
+
+              <p>次回請求日: {formatDate(subscription.currentPeriodEnd)}</p>
+
+              <button
+                onClick={handleCancelSubscribe}
+                disabled={processing}
+                className="mt-4 rounded bg-red-600 px-4 py-2 text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+              >
+                {processing ? '解約中...' : 'Proプランを解約する'}
+              </button>
+            </div>
           )}
         </div>
       ) : isCanceledSubscription ? (
         <div>
           <p>サブスクキャンセル済み</p>
+          <p>契約終了日: {formatDate(subscription.endedAt)}</p>
           <button
             onClick={handleReSubscribe}
             disabled={processing}
