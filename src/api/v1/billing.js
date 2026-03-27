@@ -14,9 +14,9 @@ export const createCheckoutSession = async (token) => {
   return response.data;
 };
 
-export const getMyPaymentMethod = async (token) => {
+export const getMyPaymentMethods = async (token) => {
   const response = await client_dschecker.get(
-    '/api/v1/billing/payment-method',
+    '/api/v1/billing/payment-methods',
     {
       headers: {
         Authorization: `Bearer ${token}`,

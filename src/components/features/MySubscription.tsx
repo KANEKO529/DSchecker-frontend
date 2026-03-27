@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@clerk/nextjs';
 import { AxiosError } from 'axios';
 import { getMySubscription, cancelMySubscription, resumeMySubscription } from '@/src/api/v1/subscription';
-import { createCheckoutSession, getMyPaymentMethod } from '@/src/api/v1/billing';
+import { createCheckoutSession, getMyPaymentMethods } from '@/src/api/v1/billing';
 
 type Subscription = {
   stripePriceId: string;
@@ -18,18 +18,32 @@ type Subscription = {
   endedAt?: string;
 } | null;
 
-type PaymentMethod = {
-  id: string;
-  brand: string;
-  last4: string;
-  expMonth: number;
-  expYear: number;
-} | null;
+type PaymentMethodItem = {
+  id: string
+  brand: string
+  last4: string
+  expMonth: number
+  expYear: number
+  isDefault: boolean
+  billingDetails: {
+    name: string
+    email: string
+    phone: string
+    address: {
+      country: string
+      postalCode: string
+      state: string
+      city: string
+      line1: string
+      line2: string
+    }
+  }
+}
 
 const MySubscription = () => {
   const { getToken, isSignedIn, isLoaded } = useAuth();
   const [subscription, setSubscription] = useState<Subscription>(null);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(null);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodItem[]>([]);
   const [processing, setProcessing] = useState(false);
 
   const [loading, setLoading] = useState(true);
@@ -64,12 +78,12 @@ const MySubscription = () => {
       }
     };
 
-    const fetchPaymentMethod = async () => {
+    const fetchPaymentMethods = async () => {
       if (!isLoaded) return;
     
       try {
         if (!isSignedIn) {
-          setPaymentMethod(null);
+          setPaymentMethods([]);
           return;
         }
     
@@ -78,28 +92,26 @@ const MySubscription = () => {
           throw new Error('token not found');
         }
     
-        const res = await getMyPaymentMethod(token);
-        const pm = res.data.paymentMethod;
+        const res = await getMyPaymentMethods(token);
+        console.log("res:", res)
+
+        const pms = res.data.paymentMethods || [];
+
+        console.log("pms:", pms)
     
-        if (!pm) {
-          setPaymentMethod(null);
+        if (!pms) {
+          setPaymentMethods([]);
           return;
         }
-    
-        setPaymentMethod({
-          id: pm.id,
-          brand: pm.brand,
-          last4: pm.last4,
-          expMonth: pm.expMonth,
-          expYear: pm.expYear,
-        });
+
+        setPaymentMethods(pms);
       } catch (err) {
         console.error('Failed to fetch payment method', err);
       }
     };
 
     fetchSubscription();
-    fetchPaymentMethod();
+    fetchPaymentMethods();
   }, [getToken, isSignedIn, isLoaded]);
 
   const handleSubscribe = async () => {
@@ -274,6 +286,15 @@ const MySubscription = () => {
     }
   };
 
+  const currentPaymentMethod = paymentMethods.find(pm => pm.isDefault) ?? null;
+
+  const formatPostalCode = (code?: string) => {
+    if (!code) return null;
+    return code.includes('-')
+      ? code
+      : `${code.slice(0, 3)}-${code.slice(3)}`;
+  };
+
   if (!isLoaded || loading) {
     return <div className="text-gray-900">Loading...</div>;
   }
@@ -315,15 +336,70 @@ const MySubscription = () => {
               <p>Proプラン利用中</p>
               <p>ステータス: {getStatusLabel(subscription.status)}</p>
 
-              {paymentMethod ? (
+              {/* 現在の支払い方法 */}
+              {currentPaymentMethod ? (
                 <div className="mt-4">
-                  <p>支払い方法</p>
+                  <p className="font-semibold">支払い方法</p>
                   <p>
-                    {paymentMethod.brand.toUpperCase()} **** {paymentMethod.last4}
+                    {currentPaymentMethod.brand.toUpperCase()} **** {currentPaymentMethod.last4}
                   </p>
                   <p>
-                    有効期限: {paymentMethod.expMonth}/{paymentMethod.expYear}
+                    有効期限: {currentPaymentMethod.expMonth}/{currentPaymentMethod.expYear}
                   </p>
+                </div>
+              ) : (
+                <div className="mt-4">
+                  <p>支払い方法は未登録です</p>
+                </div>
+              )}
+
+              {/* 請求情報 */}
+              {currentPaymentMethod && (
+                <div className="mt-4">
+                  <p className="font-semibold">請求情報</p>
+                  <p>
+                    名前: {currentPaymentMethod.billingDetails?.name ?? '未設定'}
+                  </p>
+
+                  {/* 郵便番号 */}
+                  <p>
+                    {currentPaymentMethod.billingDetails?.address?.postalCode
+                      ? `〒${formatPostalCode(currentPaymentMethod.billingDetails.address.postalCode)}`
+                      : '未設定'}
+                  </p>
+
+                  {/* 住所 */}
+                  <p>
+                    {[
+                      currentPaymentMethod.billingDetails?.address?.state,
+                      currentPaymentMethod.billingDetails?.address?.city,
+                      currentPaymentMethod.billingDetails?.address?.line1,
+                      currentPaymentMethod.billingDetails?.address?.line2,
+                    ]
+                      .filter(Boolean)
+                      .join(' ') || '未設定'}
+                  </p>
+                </div>
+              )}
+
+              {/* 支払い方法一覧 */}
+              {paymentMethods.length > 0 ? (
+                <div className="mt-4">
+                  <p className="font-semibold mb-2">決済手段一覧</p>
+
+                  {paymentMethods.map((pm) => (
+                    <div key={pm.id} className="mb-2 rounded border p-2">
+                      <p>
+                        {pm.brand.toUpperCase()} **** {pm.last4}
+                        {pm.isDefault && (
+                          <span className="ml-2 text-blue-500">(デフォルト)</span>
+                        )}
+                      </p>
+                      <p>
+                        有効期限: {pm.expMonth}/{pm.expYear}
+                      </p>
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div className="mt-4">
