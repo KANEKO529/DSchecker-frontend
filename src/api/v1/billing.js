@@ -14,9 +14,35 @@ export const createCheckoutSession = async (token) => {
   return response.data;
 };
 
-export const getMyPaymentMethods = async (token) => {
+// export const getMyPaymentMethods = async (token) => {
+//   const response = await client_dschecker.get(
+//     '/api/v1/billing/payment-methods',
+//     {
+//       headers: {
+//         Authorization: `Bearer ${token}`,
+//       },
+//     }
+//   );
+
+//   return response.data;
+// };
+
+// export const getMyInvoices = async (token) => {
+//   const response = await client_dschecker.get(
+//     '/api/v1/billing/invoices', 
+//     {
+//       headers: {
+//         Authorization: `Bearer ${token}`,
+//       },
+//     }
+//   );
+
+//   return response.data;
+// };
+
+export const getBillingSummary = async (token) => {
   const response = await client_dschecker.get(
-    '/api/v1/billing/payment-methods',
+    '/api/v1/billing/summary', 
     {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -27,18 +53,6 @@ export const getMyPaymentMethods = async (token) => {
   return response.data;
 };
 
-export const getMyInvoices = async (token) => {
-  const response = await client_dschecker.get(
-    '/api/v1/billing/invoices', 
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    }
-  );
-
-  return response.data;
-};
 
 export const createCustomerPortalSession = async (token) => {
   const response = await client_dschecker.post(

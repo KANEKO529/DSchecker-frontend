@@ -335,7 +335,7 @@ export default function OcrScanner() {
       }
 
       const apiResult = await searchByModelNumber(normalized)
-      console.log('検索結果', apiResult)
+      // console.log('検索結果', apiResult)
 
       setSearchResult(apiResult.data)
 

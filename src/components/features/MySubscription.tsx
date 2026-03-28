@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@clerk/nextjs';
 import { AxiosError } from 'axios';
 import { getMySubscription, cancelMySubscription, resumeMySubscription } from '@/src/api/v1/subscription';
-import { createCheckoutSession, getMyPaymentMethods, getMyInvoices, createCustomerPortalSession } from '@/src/api/v1/billing';
+import { createCheckoutSession, getBillingSummary, createCustomerPortalSession } from '@/src/api/v1/billing';
 
 type Subscription = {
   stripePriceId: string;
@@ -65,89 +65,52 @@ const MySubscription = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchSubscription = async () => {
+    const fetchAll = async () => {
       if (!isLoaded) return;
-
+  
       try {
+        setLoading(true);
         setError(null);
-
+  
         if (!isSignedIn) {
           setSubscription(null);
-          setLoading(false);
-          return;
-        }
-
-        const token = await getToken({ skipCache: true });
-
-        if (!token) {
-          throw new Error('token not found');
-        }
-
-        const res = await getMySubscription(token);
-        setSubscription(res.data.subscription);
-      } catch (err) {
-        console.error('Failed to fetch subscription', err);
-        setError(err instanceof Error ? err.message : 'subscription fetch error');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    const fetchPaymentMethods = async () => {
-      if (!isLoaded) return;
-    
-      try {
-        if (!isSignedIn) {
           setPaymentMethods([]);
-          return;
-        }
-    
-        const token = await getToken({ skipCache: true });
-        if (!token) {
-          throw new Error('token not found');
-        }
-    
-        const res = await getMyPaymentMethods(token);
-        console.log("res:", res)
-
-        const pms = res.data.paymentMethods || [];
-
-        console.log("pms:", pms)
-    
-        if (!pms) {
-          setPaymentMethods([]);
-          return;
-        }
-
-        setPaymentMethods(pms);
-      } catch (err) {
-        console.error('Failed to fetch payment method', err);
-      }
-    };
-
-    const fetchInvoices = async () => {
-      try {
-        if (!isSignedIn) {
           setInvoices([]);
           return;
         }
-
+  
         const token = await getToken({ skipCache: true });
-        if (!token) throw new Error('token not found');
+        if (!token) {
+          throw new Error('token not found');
+        }
+  
+        const [subscriptionRes, billingRes] = await Promise.all([
+          getMySubscription(token),
+          getBillingSummary(token),
+        ]);
 
-        const data = await getMyInvoices(token);
-        console.log("invoices data:", invoices)
-        setInvoices(data.invoices ?? []);
-      } catch (e) {
-        setError('請求履歴の取得に失敗しました');
+        setSubscription(subscriptionRes.data.subscription);
+
+        const summary = billingRes.data;
+
+        setPaymentMethods(summary.paymentMethods || []);
+        setInvoices(summary.invoices || []);
+      } catch (err) {
+        console.error('Failed to fetch subscription/billing summary', err);
+  
+        if (err instanceof AxiosError) {
+          setError(err.response?.data?.error ?? err.message);
+        } else if (err instanceof Error) {
+          setError(err.message);
+        } else {
+          setError('failed to fetch data');
+        }
       } finally {
         setLoading(false);
       }
     };
-
-    fetchSubscription();
-    fetchPaymentMethods();
-    fetchInvoices();
+  
+    fetchAll();
   }, [getToken, isSignedIn, isLoaded]);
 
   const handleSubscribe = async () => {
@@ -161,11 +124,7 @@ const MySubscription = () => {
 
       const data = await createCheckoutSession(token);
 
-      console.log("data:", data)
       const checkoutUrl = data?.data.checkoutUrl;
-
-      console.log("checkoutUrl:", checkoutUrl)
-
       
       if (checkoutUrl) {
         window.location.href = checkoutUrl;
@@ -301,7 +260,6 @@ const MySubscription = () => {
       if (!token) throw new Error('token not found')
   
       const data = await createCustomerPortalSession(token)
-      console.log("url:", data)
       window.location.href = data.url
     } catch (err) {
       console.error(err)
