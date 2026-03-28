@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@clerk/nextjs';
 import { AxiosError } from 'axios';
 import { getMySubscription, cancelMySubscription, resumeMySubscription } from '@/src/api/v1/subscription';
-import { createCheckoutSession, getMyPaymentMethods, getMyInvoices  } from '@/src/api/v1/billing';
+import { createCheckoutSession, getMyPaymentMethods, getMyInvoices, createCustomerPortalSession } from '@/src/api/v1/billing';
 
 type Subscription = {
   stripePriceId: string;
@@ -295,6 +295,20 @@ const MySubscription = () => {
     await handleSubscribe();
   };
 
+  const handleOpenCustomerPortal = async () => {
+    try {
+      const token = await getToken({ skipCache: true })
+      if (!token) throw new Error('token not found')
+  
+      const data = await createCustomerPortalSession(token)
+      console.log("url:", data)
+      window.location.href = data.url
+    } catch (err) {
+      console.error(err)
+      alert('カスタマーポータルを開けませんでした')
+    }
+  }
+
   const isCanceledSubscription =
   !!subscription &&
   !subscription.isActive &&
@@ -454,6 +468,13 @@ const MySubscription = () => {
               )}
 
               <p>次回請求日: {formatDate(subscription.currentPeriodEnd)}</p>
+
+              <button
+                onClick={handleOpenCustomerPortal}
+                className="mt-4 rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+              >
+                支払い方法・請求情報を変更
+              </button>
 
               <button
                 onClick={handleCancelSubscribe}
