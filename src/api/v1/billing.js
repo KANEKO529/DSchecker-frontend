@@ -26,3 +26,16 @@ export const getMyPaymentMethods = async (token) => {
 
   return response.data;
 };
+
+export const getMyInvoices = async (token) => {
+  const response = await client_dschecker.get(
+    '/api/v1/billing/invoices', 
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+
+  return response.data;
+};

@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@clerk/nextjs';
 import { AxiosError } from 'axios';
 import { getMySubscription, cancelMySubscription, resumeMySubscription } from '@/src/api/v1/subscription';
-import { createCheckoutSession, getMyPaymentMethods } from '@/src/api/v1/billing';
+import { createCheckoutSession, getMyPaymentMethods, getMyInvoices  } from '@/src/api/v1/billing';
 
 type Subscription = {
   stripePriceId: string;
@@ -40,12 +40,27 @@ type PaymentMethodItem = {
   }
 }
 
+export type InvoiceListItem = {
+  invoiceId: string;
+  invoiceNumber: string;
+  billedAt: string;
+  amountPaid: number;
+  currency: string;
+  status: string;
+  statusLabel: string;
+  subscriptionName: string;
+  hostedInvoiceUrl: string;
+  invoicePdf: string;
+};
+
 const MySubscription = () => {
   const { getToken, isSignedIn, isLoaded } = useAuth();
+
   const [subscription, setSubscription] = useState<Subscription>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodItem[]>([]);
-  const [processing, setProcessing] = useState(false);
+  const [invoices, setInvoices] = useState<InvoiceListItem[]>([]);
 
+  const [processing, setProcessing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -110,8 +125,29 @@ const MySubscription = () => {
       }
     };
 
+    const fetchInvoices = async () => {
+      try {
+        if (!isSignedIn) {
+          setInvoices([]);
+          return;
+        }
+
+        const token = await getToken({ skipCache: true });
+        if (!token) throw new Error('token not found');
+
+        const data = await getMyInvoices(token);
+        console.log("invoices data:", invoices)
+        setInvoices(data.invoices ?? []);
+      } catch (e) {
+        setError('請求履歴の取得に失敗しました');
+      } finally {
+        setLoading(false);
+      }
+    };
+
     fetchSubscription();
     fetchPaymentMethods();
+    fetchInvoices();
   }, [getToken, isSignedIn, isLoaded]);
 
   const handleSubscribe = async () => {
@@ -264,10 +300,7 @@ const MySubscription = () => {
   !subscription.isActive &&
   (subscription.status === 'canceled' || !!subscription.endedAt || !!subscription.canceledAt);
 
-  const formatDate = (date?: string | null) => {
-    if (!date) return "-";
-    return new Date(date).toLocaleDateString("ja-JP");
-  };
+
 
   const getStatusLabel = (status: string) => {
     switch (status) {
@@ -288,12 +321,25 @@ const MySubscription = () => {
 
   const currentPaymentMethod = paymentMethods.find(pm => pm.isDefault) ?? null;
 
+  const formatPrice = (amount: number, currency: string) => {
+    if (currency.toLowerCase() === 'jpy') {
+      return `¥${amount.toLocaleString()}`;
+    }
+    return `${amount.toLocaleString()} ${currency.toUpperCase()}`;
+  };
+
   const formatPostalCode = (code?: string) => {
     if (!code) return null;
     return code.includes('-')
       ? code
       : `${code.slice(0, 3)}-${code.slice(3)}`;
   };
+
+  const formatDate = (date?: string | null) => {
+    if (!date) return "-";
+    return new Date(date).toLocaleDateString("ja-JP");
+  };
+
 
   if (!isLoaded || loading) {
     return <div className="text-gray-900">Loading...</div>;
@@ -443,6 +489,60 @@ const MySubscription = () => {
           </button>
         </div>
       )}
+
+      <div className="mt-6">
+        <h2 className="mb-4 text-lg font-semibold text-gray-900">請求履歴</h2>
+
+        {invoices.length === 0 ? (
+          <p className="text-sm text-gray-600">請求履歴はありません</p>
+        ) : (
+          <div className="overflow-x-auto rounded border bg-white">
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50 text-left text-gray-700">
+                <tr>
+                  <th className="px-4 py-3">日付</th>
+                  <th className="px-4 py-3">金額</th>
+                  <th className="px-4 py-3">状態</th>
+                  <th className="px-4 py-3">プラン名</th>
+                  <th className="px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoices.map((invoice) => (
+                  <tr key={invoice.invoiceId} className="border-t">
+                    <td className="px-4 py-3 text-gray-900">
+                      {formatDate(invoice.billedAt)}
+                    </td>
+                    <td className="px-4 py-3 text-gray-900">
+                      {formatPrice(invoice.amountPaid, invoice.currency)}
+                    </td>
+                    <td className="px-4 py-3 text-gray-900">
+                      {invoice.statusLabel}
+                    </td>
+                    <td className="px-4 py-3 text-gray-900">
+                      {invoice.subscriptionName}
+                    </td>
+                    <td className="px-4 py-3">
+                      {invoice.hostedInvoiceUrl ? (
+                        <a
+                          href={invoice.hostedInvoiceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:underline"
+                        >
+                          詳細を見る
+                        </a>
+                      ) : (
+                        <span className="text-gray-400">詳細なし</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
