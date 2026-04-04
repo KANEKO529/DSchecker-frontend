@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { getMe } from '@/src/api/v1/me';
+import ProfileEditor from './ProfileEditor';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -91,6 +92,30 @@ const Me = () => {
           <p>メール: {result.data.user.email ?? 'なし'}</p>
         </div>
       )}
+
+      <div className="mt-4">
+        <ProfileEditor
+          initialUsername={result?.data?.user?.userName ?? ''}
+          onUpdated={(newUsername) => {
+            setResult((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    data: prev.data
+                      ? {
+                          ...prev.data,
+                          user: {
+                            ...prev.data.user,
+                            userName: newUsername,
+                          },
+                        }
+                      : prev.data,
+                  }
+                : prev
+            );
+          }}
+        />
+      </div>
     </div>
   );
 };
