@@ -10,10 +10,12 @@ export const getMe = async (token) => {
   return res.data;
 };
 
-export const updateMyProfile = async (token, username) => {
+export const updateMyProfile = async (token, data) => {
+  console.log('updateMyProfile data', data)
+  
   const response = await client_dschecker.patch(
     '/api/v1/me/profile',
-    { username },
+    data,
     {
       headers: {
         Authorization: `Bearer ${token}`,

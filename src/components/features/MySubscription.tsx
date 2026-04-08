@@ -6,6 +6,8 @@ import { useAuth } from '@clerk/nextjs';
 import { AxiosError } from 'axios';
 import { getMySubscription, cancelMySubscription, resumeMySubscription } from '@/src/api/v1/subscription';
 import { createCheckoutSession, getBillingSummary, createCustomerPortalSession } from '@/src/api/v1/billing';
+import { useRouter } from 'next/navigation';
+
 
 type Subscription = {
   stripePriceId: string;
@@ -63,6 +65,8 @@ const MySubscription = () => {
   const [processing, setProcessing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -320,6 +324,7 @@ const MySubscription = () => {
   return (
     <div className="mt-6 text-gray-900">
       <h2 className="mb-2 text-lg font-semibold">サブスクリプション</h2>
+
   
       {error && <p className="mb-3 text-red-600">{error}</p>}
   
@@ -522,6 +527,15 @@ const MySubscription = () => {
           </div>
         )}
       </div>
+
+      <button
+          type="button"
+          onClick={() => router.push('/mypage/')}
+          className="rounded bg-blue-600 px-4 py-2 text-white"
+        >
+          マイページへ戻る
+        </button>
+        
     </div>
   );
 };

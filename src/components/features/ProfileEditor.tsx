@@ -3,31 +3,38 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '@clerk/nextjs'
 import { updateMyProfile } from '@/src/api/v1/me'
+import { useRouter } from 'next/navigation';
+
 
 type Props = {
-  initialUsername: string
-  onUpdated?: (newUsername: string) => void
+  initialFirstName: string
+  initialLastName: string
 }
 
-export default function ProfileEditor({ initialUsername, onUpdated }: Props) {
+export default function ProfileEditor({ initialFirstName, initialLastName}: Props) {
   const { getToken } = useAuth()
 
-  const [username, setUsername] = useState(initialUsername)
+  const [firstName, setFirstName] = useState(initialFirstName)
+  const [lastName, setLastName] = useState(initialLastName)
+
   const [saving, setSaving] = useState(false)
   const [successMessage, setSuccessMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
+  const router = useRouter();
+
 
   useEffect(() => {
-    setUsername(initialUsername)
-  }, [initialUsername])
+    setFirstName(initialFirstName)
+    setLastName(initialLastName)
+  }, [initialFirstName, initialLastName])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-
+  
     setSaving(true)
     setSuccessMessage('')
     setErrorMessage('')
-
+  
     try {
       const token = await getToken({ skipCache: true })
       if (!token) {
@@ -35,10 +42,14 @@ export default function ProfileEditor({ initialUsername, onUpdated }: Props) {
         return
       }
 
-      await updateMyProfile(token, username)
-
+      console.log('submit payload', { firstName, lastName })
+  
+      await updateMyProfile(token, {
+        firstName,
+        lastName,
+      })
+  
       setSuccessMessage('プロフィールを更新しました')
-      onUpdated?.(username)
     } catch (error) {
       console.error(error)
       setErrorMessage('プロフィールの更新に失敗しました')
@@ -46,18 +57,25 @@ export default function ProfileEditor({ initialUsername, onUpdated }: Props) {
       setSaving(false)
     }
   }
-
   return (
     <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border p-4 bg-white text-gray-900">
       <div>
-        <label className="mb-1 block text-sm font-medium">ユーザー名</label>
+        <label className="mb-1 block text-sm font-medium">姓</label>
         <input
           type="text"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
+          value={lastName}
+          onChange={(e) => setLastName(e.target.value)}
           className="w-full rounded border px-3 py-2"
-          minLength={3}
-          maxLength={50}
+        />
+      </div>
+
+      <div>
+        <label className="mb-1 block text-sm font-medium">名</label>
+        <input
+          type="text"
+          value={firstName}
+          onChange={(e) => setFirstName(e.target.value)}
+          className="w-full rounded border px-3 py-2"
         />
       </div>
 
@@ -68,6 +86,15 @@ export default function ProfileEditor({ initialUsername, onUpdated }: Props) {
       >
         {saving ? '保存中...' : '保存する'}
       </button>
+
+      <button
+          type="button"
+          onClick={() => router.push('/mypage/')}
+          className="rounded bg-blue-600 px-4 py-2 text-white"
+        >
+          マイページへ戻る
+        </button>
+
 
       {successMessage && <p className="text-sm text-green-600">{successMessage}</p>}
       {errorMessage && <p className="text-sm text-red-600">{errorMessage}</p>}

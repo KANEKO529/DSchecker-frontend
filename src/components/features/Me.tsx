@@ -1,11 +1,9 @@
-// src/components/features/Me.tsx
-// src/components/features/Me.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
 import { useAuth, useUser } from '@clerk/nextjs';
+import { useRouter } from 'next/navigation';
 import { getMe } from '@/src/api/v1/me';
-import ProfileEditor from './ProfileEditor';
 import AccountDeleter from './account/AccountDeleter';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,6 +22,7 @@ type MeResponse = {
 const Me = () => {
   const { isLoaded, isSignedIn, getToken } = useAuth();
   const { user } = useUser();
+  const router = useRouter();
 
   const [result, setResult] = useState<MeResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -89,35 +88,32 @@ const Me = () => {
     <div className="mt-6 rounded bg-gray-100 p-4 text-sm text-gray-900">
       {result?.data?.user && (
         <div className="mt-3 space-y-1">
-          <p>ユーザー名: {result.data.user.userName ?? 'なし'}</p>
+          <p>
+          {user
+            ? `${user.lastName ?? ''}${user.firstName ?? ''}`
+            : result.data.user.userName ?? 'なし'}
+          </p>          
           <p>メール: {result.data.user.email ?? 'なし'}</p>
         </div>
       )}
 
-      <div className="mt-4">
-        <ProfileEditor
-          initialUsername={result?.data?.user?.userName ?? ''}
-          onUpdated={(newUsername) => {
-            setResult((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    data: prev.data
-                      ? {
-                          ...prev.data,
-                          user: {
-                            ...prev.data.user,
-                            userName: newUsername,
-                          },
-                        }
-                      : prev.data,
-                  }
-                : prev
-            );
-          }}
-        />
-      </div>
+      <div className="mt-4 flex gap-3">
+        <button
+          type="button"
+          onClick={() => router.push('/mypage/subscription')}
+          className="rounded bg-blue-600 px-4 py-2 text-white"
+        >
+          サブスクリプションを管理
+        </button>
 
+        <button
+          type="button"
+          onClick={() => router.push('/mypage/edit')}
+          className="rounded bg-blue-600 px-4 py-2 text-white"
+        >
+          プロフィールを編集
+        </button>
+      </div>
 
       <div className="mt-8 border-t border-gray-300 pt-6">
         <AccountDeleter />
