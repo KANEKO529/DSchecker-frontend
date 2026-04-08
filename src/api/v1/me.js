@@ -23,3 +23,13 @@ export const updateMyProfile = async (token, username) => {
 
   return response.data
 }
+
+export const deleteMyAccount = async (token) => {
+  const response = await client_dschecker.delete('/api/v1/me', {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  return response.data
+}

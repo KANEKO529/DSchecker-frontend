@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { getMe } from '@/src/api/v1/me';
 import ProfileEditor from './ProfileEditor';
+import AccountDeleter from './account/AccountDeleter';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -115,6 +116,11 @@ const Me = () => {
             );
           }}
         />
+      </div>
+
+
+      <div className="mt-8 border-t border-gray-300 pt-6">
+        <AccountDeleter />
       </div>
     </div>
   );
