@@ -5,6 +5,8 @@ import Tesseract from 'tesseract.js'
 import { Sun, X,  History, Trash2} from 'lucide-react'
 import { searchByModelNumber } from '@/src/api/v1/ocr'
 import Footer from '../layouts/Footer'
+import { useAuth } from '@clerk/nextjs'
+
 
 type SearchItem = {
   id: number
@@ -30,6 +32,9 @@ const SCAN_HISTORY_KEY = 'dschecker_scan_history'
 const MAX_HISTORY_COUNT = 10
 
 export default function OcrScanner() {
+  const { getToken } = useAuth()
+
+
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const captureCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -299,65 +304,83 @@ export default function OcrScanner() {
   }
 
   const handleScan = async () => {
+    let normalized = ''
+  
     try {
+      const token = await getToken({ skipCache: true })
+
       setScanStatus('idle')
       setIsScanning(true)
       setError('')
       setRecognizedText('')
       setSearchResult(null)
-
+  
       const imageDataUrl = drawCropPreview()
-
+  
       if (!imageDataUrl) {
         setError('画像の切り出しに失敗しました')
         flashScanStatus('error')
         return
       }
-
+  
       const ocrResult = await Tesseract.recognize(imageDataUrl, 'eng', {
         logger: (m) => {
           console.log(m)
         },
       })
-
-      const normalized = ocrResult.data.text
+  
+      normalized = ocrResult.data.text
         .replace(/\s+/g, '')
         .replace(/[^a-zA-Z0-9\-]/g, '')
         .toUpperCase()
-
+  
+      console.log('ocr raw:', ocrResult.data.text)
+      console.log('normalized:', normalized)
+  
       setRecognizedText(normalized)
-
+  
       if (!normalized) {
         setError('型番を読み取れませんでした')
         flashScanStatus('error')
-
         return
       }
-
-      const apiResult = await searchByModelNumber(normalized)
-      // console.log('検索結果', apiResult)
-
-      setSearchResult(apiResult.data)
+  
+      const apiResult = await searchByModelNumber(token, normalized)
+  
+      setSearchResult(apiResult.data.item)
 
       saveScanHistory({
         modelNumber: normalized,
-        itemName: apiResult.data.itemName,
-        marketPrice: apiResult.data.marketPrice ?? null,
+        itemName: apiResult.data.item.name,
+        marketPrice: apiResult.data.item.marketPrice ?? null,
         scannedAt: new Date().toISOString(),
       })
-
+  
       setShowHistoryPanel(true)
-      
       flashScanStatus('success')
-      
     } catch (err: any) {
       console.error(err)
       flashScanStatus('error')
-
-      if (err?.response?.status === 404) {
+    
+      const status = err?.response?.status
+      const errorCode = err?.response?.data?.error?.code
+      const errorMessage = err?.response?.data?.error?.message
+      const usage = err?.response?.data?.usage
+    
+      if (status === 400 && errorCode === 'INVALID_MODEL_NUMBER') {
+        setError('型番を読み取れませんでした')
+      } else if (status === 429 && errorCode === 'USAGE_LIMIT_EXCEEDED') {
+        setError(
+          usage
+            ? `${errorMessage}（使用: ${usage.usedCount ?? '-'} / 上限: ${usage.limit ?? '-'}）`
+            : errorMessage || '利用回数の上限に達しました'
+        )
+      } else if (status === 404 && errorCode === 'ITEM_NOT_FOUND') {
         setError('該当する商品が見つかりませんでした')
+      } else if (status === 502 && errorCode === 'UPSTREAM_ERROR') {
+        setError('検索サーバーとの通信に失敗しました。少し待ってから再度お試しください。')
       } else {
-        setError('OCRまたは商品検索に失敗しました')
+        setError(`OCRまたは商品検索に失敗しました: ${normalized}`)
       }
     } finally {
       setIsScanning(false)

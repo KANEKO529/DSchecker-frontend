@@ -17,7 +17,7 @@ const SideBar = () => {
   const { user, isSignedIn, isLoaded  } = useUser();
   const { signOut } = useClerk();
 
-  const displayName = `${user.lastName ?? ''}${user.firstName ?? ''}`
+  const displayName = `${user?.lastName ?? ''}${user?.firstName ?? ''}`
 
   const menuItems = [
     { icon: Home, label: 'ホーム', href: '/' },

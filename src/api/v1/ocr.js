@@ -1,15 +1,23 @@
 // src/api/v1/ocr.js
 
-import {client_kotodb} from './client';
+// import {client_kotodb} from './client';
+import { client_dschecker } from './client';
 
-export const searchByModelNumber = async (modelNumber) => {
 
-//   console.log(client_kotodb.defaults.baseURL)
+export const searchByModelNumber = async (token, modelNumber) => {
 
+  //   console.log(client_kotodb.defaults.baseURL)
   try {
-    const response = await client_kotodb.post('/api/v1/items/search_by_model_number', {
-      model_number: modelNumber,
-    });
+    const response = await client_dschecker.post(
+      '/api/v1/price-searches',
+      {
+        model_number: modelNumber,
+      },
+      {
+        withCredentials: true,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      }
+    );
 
     console.log('型番検索に成功しました', response);
     return response.data;
