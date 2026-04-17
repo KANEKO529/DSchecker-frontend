@@ -4,6 +4,7 @@ import "./globals.css";
 import ClientWrapper from '../src/components/layouts/ClientWrapper'
 import Footer from "@/src/components/layouts/Footer";
 import { ClerkProvider } from '@clerk/nextjs'
+import { UserProvider } from '@/src/contexts/UserContext'
 
 import type { Viewport } from 'next'
 
@@ -41,7 +42,11 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <ClerkProvider>
-          <ClientWrapper>{children}</ClientWrapper>
+          <ClientWrapper>
+            <UserProvider>
+              {children}
+            </UserProvider>
+          </ClientWrapper>
         </ClerkProvider>
       </body>
     </html>

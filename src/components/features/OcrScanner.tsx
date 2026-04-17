@@ -6,6 +6,7 @@ import { Sun, X,  History, Trash2} from 'lucide-react'
 import { searchByModelNumber } from '@/src/api/v1/ocr'
 import Footer from '../layouts/Footer'
 import { useAuth } from '@clerk/nextjs'
+import { useUserContext } from '@/src/contexts/UserContext'
 
 
 type SearchItem = {
@@ -27,6 +28,8 @@ type ScanHistoryItem = {
     scannedAt: string
     merkariUrl?: string | null
 }
+
+type ScanMode = 'manual' | 'auto'
   
 const SCAN_HISTORY_KEY = 'dschecker_scan_history'
 const MAX_HISTORY_COUNT = 10
@@ -56,6 +59,17 @@ export default function OcrScanner() {
   const [showBrightnessControl, setShowBrightnessControl] = useState(false)
   const [historyItems, setHistoryItems] = useState<ScanHistoryItem[]>([])
   const [showHistoryPanel, setShowHistoryPanel] = useState(false)
+
+  const [scanMode, setScanMode] = useState<ScanMode>('manual')
+
+  const [autoEnabled, setAutoEnabled] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const lastDetectedRef = useRef<string | null>(null)
+  const detectCountRef = useRef(0)
+  const lastSubmittedRef = useRef<string | null>(null)
+
+  const { planStatus, isProUser, loading } = useUserContext()
 
   const flashScanStatus = (status: 'success' | 'error') => {
     setScanStatus(status)
@@ -162,6 +176,77 @@ export default function OcrScanner() {
       console.error('履歴削除に失敗しました', err)
     }
   }
+
+  useEffect(() => {
+    if (scanMode !== 'auto') return
+    if (!autoEnabled) return
+  
+    let intervalId: NodeJS.Timeout
+  
+    const runAutoScan = async () => {
+      if (isScanning || isSubmitting) return
+  
+      try {
+        const imageDataUrl = drawCropPreview()
+        if (!imageDataUrl) return
+  
+        const result = await Tesseract.recognize(imageDataUrl, 'eng')
+  
+        const normalized = result.data.text
+          .replace(/\s+/g, '')
+          .replace(/[^a-zA-Z0-9\-]/g, '')
+          .toUpperCase()
+  
+        if (!normalized) return
+  
+        // 同一判定ロジック
+        if (lastDetectedRef.current === normalized) {
+          detectCountRef.current++
+        } else {
+          lastDetectedRef.current = normalized
+          detectCountRef.current = 1
+        }
+  
+        // 2回連続一致で確定
+        if (detectCountRef.current >= 2) {
+  
+          // 同じもの連続送信防止
+          if (lastSubmittedRef.current === normalized) return
+  
+          setIsSubmitting(true)
+  
+          const token = await getToken({ skipCache: true })
+          const apiResult = await searchByModelNumber(token, normalized)
+  
+          setSearchResult(apiResult.data.item)
+  
+          saveScanHistory({
+            modelNumber: normalized,
+            itemName: apiResult.data.item.name,
+            marketPrice: apiResult.data.item.marketPrice ?? null,
+            scannedAt: new Date().toISOString(),
+          })
+  
+          lastSubmittedRef.current = normalized
+          detectCountRef.current = 0
+  
+          flashScanStatus('success')
+  
+          // クールダウン
+          setTimeout(() => {
+            setIsSubmitting(false)
+          }, 3000)
+        }
+  
+      } catch (err) {
+        console.error(err)
+      }
+    }
+  
+    intervalId = setInterval(runAutoScan, 1200)
+  
+    return () => clearInterval(intervalId)
+  }, [scanMode, autoEnabled])
 
   useEffect(() => {
     const savedHistory = loadScanHistory()
@@ -527,14 +612,15 @@ export default function OcrScanner() {
 
                 <div className="flex justify-center">
                     
-                <button
-                    type="button"
-                    onClick={handleScan}
-                    disabled={!streamReady || isScanning}
-                    className="w-40 max-w-md rounded-xl bg-blue-600 py-4 text-xl font-bold text-white shadow-lg disabled:opacity-50"
-                >
-                    {isScanning ? 'スキャン中...' : 'スキャン'}
-                </button>
+                {scanMode === 'manual' && (
+                  <button onClick={handleScan}>スキャン</button>
+                )}
+
+                {scanMode === 'auto' && (
+                  <button onClick={() => setAutoEnabled(prev => !prev)}>
+                    {autoEnabled ? '停止' : '自動スキャン開始'}
+                  </button>
+                )}
                 </div>
 
             </div>
@@ -568,6 +654,20 @@ export default function OcrScanner() {
                     {showBrightnessControl ? <X size={22} /> : <Sun size={22} />}
                 </button>
             </div>
+
+          {isProUser && (
+            <div className="absolute bottom-30 right-6 z-20">
+              <button
+                onClick={() =>
+                  setScanMode(scanMode === 'auto' ? 'manual' : 'auto')
+                }
+                className="px-4 py-2 rounded bg-blue-600 text-white"
+              >
+                {scanMode === 'auto' ? '自動' : '手動'}
+              </button>
+            </div>
+          )}
+
         </div>
       </div>
   
