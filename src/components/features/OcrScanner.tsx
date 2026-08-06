@@ -29,6 +29,20 @@ type ScanHistoryItem = {
     merkariUrl?: string | null
 }
 
+type ScanMetrics = {
+  t1ImageProcessingMs?: number
+  t2OcrMs?: number
+  t3ModelNumberProcessingMs?: number
+  t4GoApiRoundTripMs?: number
+  t7SearchFeatureMs?: number
+  t8UserPerceivedMs?: number
+}
+
+type CropPreviewResult = {
+  imageDataUrl: string
+  elapsedMs: number
+}
+
 type ScanMode = 'manual' | 'auto'
   
 const SCAN_HISTORY_KEY = 'dschecker_scan_history'
@@ -38,6 +52,7 @@ export default function OcrScanner() {
   const { getToken } = useAuth()
 
 
+  const streamRef = useRef<MediaStream | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const captureCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -70,6 +85,17 @@ export default function OcrScanner() {
   const lastSubmittedRef = useRef<string | null>(null)
 
   const { planStatus, isProUser, loading } = useUserContext()
+
+  const [isResetting, setIsResetting] = useState(false)
+
+  const autoScanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastImageRef = useRef<string | null>(null)
+  const lastScanTimeRef = useRef(0)
+
+  const scanMetricsRef = useRef<ScanMetrics>({})
+  const t8StartRef = useRef<number | null>(null)
+
+  const measuredModelNumberRef = useRef('')
 
   const flashScanStatus = (status: 'success' | 'error') => {
     setScanStatus(status)
@@ -116,11 +142,18 @@ export default function OcrScanner() {
     }
   }
 
-  const cropRect = {
-    xRatio: 0.18,
-    yRatio: 0.40,
-    widthRatio: 0.64,
-    heightRatio: 0.10,
+  const cardFrameRect = {
+    xRatio: 0.10,
+    yRatio: 0.26,
+    widthRatio: 0.80,
+    heightRatio: 0.54,
+  }
+
+  const modelAreaRect = {
+    xRatioInFrame: 0.34,
+    yRatioInFrame: 0.76,
+    widthRatioInFrame: 0.56,
+    heightRatioInFrame: 0.10,
   }
 
   const loadScanHistory = (): ScanHistoryItem[] => {
@@ -176,77 +209,142 @@ export default function OcrScanner() {
       console.error('履歴削除に失敗しました', err)
     }
   }
-
+  
   useEffect(() => {
-    if (scanMode !== 'auto') return
-    if (!autoEnabled) return
+    if (scanMode !== 'auto' || !autoEnabled || !streamReady) return
   
-    let intervalId: NodeJS.Timeout
+    let cancelled = false
   
-    const runAutoScan = async () => {
-      if (isScanning || isSubmitting) return
+    const scheduleNext = (delay = 300) => {
+      clearAutoScanTimer()
+      autoScanTimeoutRef.current = setTimeout(() => {
+        void loop()
+      }, delay)
+    }
+  
+    const loop = async () => {
+      if (cancelled) return
+  
+      if (isScanning || isSubmitting || isResetting) {
+        scheduleNext(300)
+        return
+      }
+  
+      const now = Date.now()
+      if (now - lastScanTimeRef.current < 300) {
+        scheduleNext(150)
+        return
+      }
+  
+      setIsSubmitting(true)
+      lastScanTimeRef.current = now
   
       try {
-        const imageDataUrl = drawCropPreview()
-        if (!imageDataUrl) return
+        setError('')
   
-        const result = await Tesseract.recognize(imageDataUrl, 'eng')
+        const cropResult = drawCropPreview()
+
+        if (!cropResult) {
+          scheduleNext(300)
+          return
+        }
+
+        const { imageDataUrl } = cropResult
   
-        const normalized = result.data.text
-          .replace(/\s+/g, '')
-          .replace(/[^a-zA-Z0-9\-]/g, '')
-          .toUpperCase()
-  
-        if (!normalized) return
-  
-        // 同一判定ロジック
-        if (lastDetectedRef.current === normalized) {
-          detectCountRef.current++
-        } else {
-          lastDetectedRef.current = normalized
-          detectCountRef.current = 1
+        if (isSimilarImage(lastImageRef.current, imageDataUrl)) {
+          scheduleNext(250)
+          return
         }
   
-        // 2回連続一致で確定
-        if (detectCountRef.current >= 2) {
+        lastImageRef.current = imageDataUrl
   
-          // 同じもの連続送信防止
-          if (lastSubmittedRef.current === normalized) return
+        const result = await Tesseract.recognize(imageDataUrl, 'eng', {
+          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+        })
+
+        if (cancelled) return
   
-          setIsSubmitting(true)
-  
-          const token = await getToken({ skipCache: true })
-          const apiResult = await searchByModelNumber(token, normalized)
-  
-          setSearchResult(apiResult.data.item)
-  
-          saveScanHistory({
-            modelNumber: normalized,
-            itemName: apiResult.data.item.name,
-            marketPrice: apiResult.data.item.marketPrice ?? null,
-            scannedAt: new Date().toISOString(),
-          })
-  
-          lastSubmittedRef.current = normalized
-          detectCountRef.current = 0
-  
-          flashScanStatus('success')
-  
-          // クールダウン
-          setTimeout(() => {
-            setIsSubmitting(false)
-          }, 3000)
+        const core = extractModelCore(result.data.text)
+        if (!core) {
+          setError('型番を読み取れませんでした')
+          flashScanStatus('error')
+          scheduleNext(400)
+          return
         }
   
-      } catch (err) {
+        const modelNumber = buildDsModelNumber(core)
+        
+        setRecognizedText(modelNumber)
+  
+        if (lastSubmittedRef.current === modelNumber) {
+          scheduleNext(600)
+          return
+        }
+  
+        const token = await getToken({ skipCache: true })
+        const apiResult = await searchByModelNumber(token, modelNumber)
+  
+        if (cancelled) return
+  
+        setSearchResult(apiResult.data.item)
+  
+        saveScanHistory({
+          modelNumber,
+          itemName: apiResult.data.item.name,
+          marketPrice: apiResult.data.item.marketPrice ?? null,
+          scannedAt: new Date().toISOString(),
+          merkariUrl: apiResult.data.item.merkariUrl ?? undefined,
+        })
+  
+        setShowHistoryPanel(true)
+        flashScanStatus('success')
+  
+        lastSubmittedRef.current = modelNumber
+        detectCountRef.current = 0
+  
+        scheduleNext(900)
+      } catch (err: any) {
         console.error(err)
+        flashScanStatus('error')
+  
+        const status = err?.response?.status
+        const errorCode = err?.response?.data?.error?.code
+        const errorMessage = err?.response?.data?.error?.message
+        const usage = err?.response?.data?.usage
+  
+        if (status === 400 && errorCode === 'INVALID_MODEL_NUMBER') {
+          setError('型番を読み取れませんでした')
+        } else if (status === 429 && errorCode === 'USAGE_LIMIT_EXCEEDED') {
+          setError(
+            usage
+              ? `${errorMessage}（使用: ${usage.usedCount ?? '-'} / 上限: ${usage.limit ?? '-'}）`
+              : errorMessage || '利用回数の上限に達しました'
+          )
+        } else if (status === 404 && errorCode === 'ITEM_NOT_FOUND') {
+          setError('該当する商品が見つかりませんでした')
+        } else if (status === 502 && errorCode === 'UPSTREAM_ERROR') {
+          setError('検索サーバーとの通信に失敗しました。少し待ってから再度お試しください。')
+        } else {
+          setError('自動スキャンに失敗しました')
+        }
+  
+        scheduleNext(800)
+      } finally {
+        if (!cancelled) {
+          setIsSubmitting(false)
+        }
       }
     }
   
-    intervalId = setInterval(runAutoScan, 1200)
+    void loop()
   
-    return () => clearInterval(intervalId)
-  }, [scanMode, autoEnabled])
+    return () => {
+      cancelled = true
+      clearAutoScanTimer()
+    }
+  }, [scanMode, autoEnabled, streamReady, isScanning, isSubmitting, isResetting, getToken, brightness, zoom])
+
+
 
   useEffect(() => {
     const savedHistory = loadScanHistory()
@@ -294,7 +392,33 @@ export default function OcrScanner() {
     }
   }, [])
 
-  const drawCropPreview = () => {
+  useEffect(() => {
+    if (!searchResult || t8StartRef.current === null) return
+  
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (t8StartRef.current === null) return
+  
+        const t8 = performance.now() - t8StartRef.current
+        scanMetricsRef.current.t8UserPerceivedMs = t8
+  
+        void sendMeasurementLog(
+          'success',
+          measuredModelNumberRef.current
+        ).catch((error) => {
+          console.error('計測ログの送信に失敗しました', error)
+        })
+  
+        t8StartRef.current = null
+      })
+    })
+  }, [searchResult])
+
+  const drawCropPreview = (): CropPreviewResult | null => {
+
+    const startedAt = performance.now()
+
+
     const video = videoRef.current
     const captureCanvas = captureCanvasRef.current
     const previewCanvas = previewCanvasRef.current
@@ -305,13 +429,11 @@ export default function OcrScanner() {
   
     const sourceWidth = video.videoWidth
     const sourceHeight = video.videoHeight
-  
     const viewportWidth = viewport.clientWidth
     const viewportHeight = viewport.clientHeight
   
     if (!viewportWidth || !viewportHeight) return null
   
-    // 元の動画を brightness 反映込みで captureCanvas に描画
     captureCanvas.width = sourceWidth
     captureCanvas.height = sourceHeight
   
@@ -322,7 +444,6 @@ export default function OcrScanner() {
     captureCtx.filter = `brightness(${brightness}%)`
     captureCtx.drawImage(video, 0, 0, sourceWidth, sourceHeight)
   
-    // object-cover の表示サイズを算出
     const videoAspect = sourceWidth / sourceHeight
     const viewportAspect = viewportWidth / viewportHeight
   
@@ -337,35 +458,46 @@ export default function OcrScanner() {
       displayedHeight = displayedWidth / videoAspect
     }
   
-    // CSS transform: scale(zoom) を反映
     displayedWidth *= zoom
     displayedHeight *= zoom
   
-    // 中央基準でどれだけはみ出しているか
     const offsetX = (displayedWidth - viewportWidth) / 2
     const offsetY = (displayedHeight - viewportHeight) / 2
   
-    // 画面上の赤枠位置（viewport基準）
-    const frameX = viewportWidth * cropRect.xRatio
-    const frameY = viewportHeight * cropRect.yRatio
-    const frameWidth = viewportWidth * cropRect.widthRatio
-    const frameHeight = viewportHeight * cropRect.heightRatio
+    // DSソフト全体の外枠
+    const frameX = viewportWidth * cardFrameRect.xRatio
+    const frameY = viewportHeight * cardFrameRect.yRatio
+    const frameWidth = viewportWidth * cardFrameRect.widthRatio
+    const frameHeight = viewportHeight * cardFrameRect.heightRatio
   
-    // viewport座標 -> source video座標へ変換
+    // 右下の型番領域
+    const modelX = frameX + frameWidth * modelAreaRect.xRatioInFrame
+    const modelY = frameY + frameHeight * modelAreaRect.yRatioInFrame
+    const modelWidth = frameWidth * modelAreaRect.widthRatioInFrame
+    const modelHeight = frameHeight * modelAreaRect.heightRatioInFrame
+  
     const scaleX = sourceWidth / displayedWidth
     const scaleY = sourceHeight / displayedHeight
   
-    let cropX = Math.floor((frameX + offsetX) * scaleX)
-    let cropY = Math.floor((frameY + offsetY) * scaleY)
-    let cropWidth = Math.floor(frameWidth * scaleX)
-    let cropHeight = Math.floor(frameHeight * scaleY)
+    let cropX = Math.floor((modelX + offsetX) * scaleX)
+    let cropY = Math.floor((modelY + offsetY) * scaleY)
+    let cropWidth = Math.floor(modelWidth * scaleX)
+    let cropHeight = Math.floor(modelHeight * scaleY)
   
-    // はみ出し防止
-    cropX = Math.max(0, Math.min(cropX, sourceWidth - cropWidth))
-    cropY = Math.max(0, Math.min(cropY, sourceHeight - cropHeight))
-    cropWidth = Math.max(1, Math.min(cropWidth, sourceWidth - cropX))
-    cropHeight = Math.max(1, Math.min(cropHeight, sourceHeight - cropY))
+    const paddingX = Math.floor(cropWidth * 0.18)
+    const paddingY = Math.floor(cropHeight * 0.35)
   
+    cropX -= paddingX
+    cropY -= paddingY
+    cropWidth += paddingX * 2
+    cropHeight += paddingY * 2
+  
+    cropX = Math.max(0, cropX)
+    cropY = Math.max(0, cropY)
+    cropWidth = Math.min(cropWidth, sourceWidth - cropX)
+    cropHeight = Math.min(cropHeight, sourceHeight - cropY)
+  
+    // 1. プレビューは「生画像」を表示
     previewCanvas.width = cropWidth
     previewCanvas.height = cropHeight
   
@@ -385,73 +517,175 @@ export default function OcrScanner() {
       cropHeight
     )
   
-    return previewCanvas.toDataURL('image/png')
-  }
-
-  const handleScan = async () => {
-    let normalized = ''
+    // 2. OCR専用canvas
+    const ocrCanvas = document.createElement('canvas')
+    const ocrCtx = ocrCanvas.getContext('2d')
+    if (!ocrCtx) return null
   
+    const scale = 4
+    ocrCanvas.width = cropWidth * scale
+    ocrCanvas.height = cropHeight * scale
+  
+    ocrCtx.imageSmoothingEnabled = false
+    ocrCtx.drawImage(
+      captureCanvas,
+      cropX,
+      cropY,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      ocrCanvas.width,
+      ocrCanvas.height
+    )
+  
+    const img = ocrCtx.getImageData(0, 0, ocrCanvas.width, ocrCanvas.height)
+    const data = img.data
+  
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i]
+      const g = data[i + 1]
+      const b = data[i + 2]
+  
+      let gray = 0.299 * r + 0.587 * g + 0.114 * b
+      gray = (gray - 128) * 1.35 + 128
+      gray = Math.max(0, Math.min(255, gray))
+  
+      const bin = gray > 165 ? 255 : 0
+  
+      data[i] = bin
+      data[i + 1] = bin
+      data[i + 2] = bin
+      data[i + 3] = 255
+    }
+  
+    ocrCtx.putImageData(img, 0, 0)
+  
+    const imageDataUrl = ocrCanvas.toDataURL('image/png')
+    const elapsedMs = performance.now() - startedAt
+  
+    return {
+      imageDataUrl,
+      elapsedMs,
+    }
+  }
+  const handleScan = async () => {
+    // T8：スキャンボタン押下時点
+    t8StartRef.current = performance.now()
+    scanMetricsRef.current = {}
+
     try {
       const token = await getToken({ skipCache: true })
 
+      // T7：画像前処理開始時点
+      const t7StartedAt = performance.now()
+  
       setScanStatus('idle')
       setIsScanning(true)
       setError('')
       setRecognizedText('')
       setSearchResult(null)
   
-      const imageDataUrl = drawCropPreview()
-  
-      if (!imageDataUrl) {
+      // -------------------------
+      // T1：画像前処理
+      // -------------------------
+      const cropResult = drawCropPreview()
+
+      if (!cropResult) {
         setError('画像の切り出しに失敗しました')
         flashScanStatus('error')
         return
       }
-  
+
+      const { imageDataUrl, elapsedMs: t1 } = cropResult
+      scanMetricsRef.current.t1ImageProcessingMs = t1
+
+      // -------------------------
+      // T2：OCR処理
+      // -------------------------
+      const t2StartedAt = performance.now()
+    
       const ocrResult = await Tesseract.recognize(imageDataUrl, 'eng', {
-        logger: (m) => {
-          console.log(m)
-        },
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
       })
+
+      const t2 = performance.now() - t2StartedAt
+      scanMetricsRef.current.t2OcrMs = t2
   
-      normalized = ocrResult.data.text
-        .replace(/\s+/g, '')
-        .replace(/[^a-zA-Z0-9\-]/g, '')
-        .toUpperCase()
-  
-      console.log('ocr raw:', ocrResult.data.text)
-      console.log('normalized:', normalized)
-  
-      setRecognizedText(normalized)
-  
-      if (!normalized) {
+      // -------------------------
+      // T3：型番抽出・整形
+      // -------------------------
+      const t3StartedAt = performance.now()
+
+      const core = extractModelCore(ocrResult.data.text)
+
+      if (!core) {
+        const t3 = performance.now() - t3StartedAt
+        scanMetricsRef.current.t3ModelNumberProcessingMs = t3
+      
+        console.table(scanMetricsRef.current)
+      
+        t8StartRef.current = null
+      
         setError('型番を読み取れませんでした')
         flashScanStatus('error')
         return
       }
   
-      const apiResult = await searchByModelNumber(token, normalized)
-  
-      setSearchResult(apiResult.data.item)
+      const modelNumber = buildDsModelNumber(core)
+      measuredModelNumberRef.current = modelNumber
 
+
+      const t3 = performance.now() - t3StartedAt
+      scanMetricsRef.current.t3ModelNumberProcessingMs = t3
+
+      setRecognizedText(modelNumber)
+
+      // -------------------------
+      // T4：Go API往復
+      // -------------------------
+  
+      const t4StartedAt = performance.now()
+
+      const apiResult = await searchByModelNumber(token, modelNumber)
+  
+      const t4 = performance.now() - t4StartedAt
+      scanMetricsRef.current.t4GoApiRoundTripMs = t4
+
+      // -------------------------
+      // T7：画像前処理開始から商品取得まで
+      // -------------------------
+  
+      const t7 = performance.now() - t7StartedAt
+      scanMetricsRef.current.t7SearchFeatureMs = t7
+
+      setSearchResult(apiResult.data.item)
+  
       saveScanHistory({
-        modelNumber: normalized,
+        modelNumber,
         itemName: apiResult.data.item.name,
         marketPrice: apiResult.data.item.marketPrice ?? null,
         scannedAt: new Date().toISOString(),
+        merkariUrl: apiResult.data.item.merkariUrl ?? undefined,
       })
+  
+      lastSubmittedRef.current = modelNumber
   
       setShowHistoryPanel(true)
       flashScanStatus('success')
     } catch (err: any) {
+      t8StartRef.current = null
+
       console.error(err)
+      console.table(scanMetricsRef.current)
+
       flashScanStatus('error')
-    
+  
       const status = err?.response?.status
       const errorCode = err?.response?.data?.error?.code
       const errorMessage = err?.response?.data?.error?.message
       const usage = err?.response?.data?.usage
-    
+  
       if (status === 400 && errorCode === 'INVALID_MODEL_NUMBER') {
         setError('型番を読み取れませんでした')
       } else if (status === 429 && errorCode === 'USAGE_LIMIT_EXCEEDED') {
@@ -465,210 +699,435 @@ export default function OcrScanner() {
       } else if (status === 502 && errorCode === 'UPSTREAM_ERROR') {
         setError('検索サーバーとの通信に失敗しました。少し待ってから再度お試しください。')
       } else {
-        setError(`OCRまたは商品検索に失敗しました: ${normalized}`)
+        setError('OCRまたは商品検索に失敗しました')
       }
     } finally {
       setIsScanning(false)
     }
   }
 
+  function extractModelCore(raw: string): string | null {
+    const text = raw
+      .toUpperCase()
+      .replace(/\s+/g, '')
+      .replace(/[^A-Z0-9]/g, '')
+  
+    // NTRの後ろ4文字を優先
+    const match = text.match(/NTR([A-Z0-9]{4})/)
+    if (match) return match[1]
+  
+    // fallback
+    const fallback = text.match(/[A-Z0-9]{4}/)
+    return fallback ? fallback[0] : null
+  }
+
+  function buildDsModelNumber(core: string): string {
+    return `NTR-${core}-JPN`
+  }
+
+  const isSimilarImage = (prev: string | null, next: string) => {
+    if (!prev) return false
+    return prev.slice(0, 120) === next.slice(0, 120)
+  }
+
+  const stopCameraStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+    }
+  
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
+    }
+  }
+  
+  const startCameraStream = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+      },
+      audio: false,
+    })
+  
+    streamRef.current = stream
+  
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream
+      await videoRef.current.play()
+    }
+  }
+  
+  const handleResetCamera = async () => {
+    try {
+      setIsResetting(true)
+  
+      clearAutoScanTimer()
+  
+      setError('')
+      setIsScanning(false)
+      setIsSubmitting(false)
+      setRecognizedText('')
+      setSearchResult(null)
+      setShowHistoryPanel(false)
+  
+      lastSubmittedRef.current = null
+      lastDetectedRef.current = null
+      detectCountRef.current = 0
+      lastImageRef.current = null
+      lastScanTimeRef.current = 0
+  
+      // 一旦自動スキャン停止
+      setScanMode('manual')
+      setAutoEnabled(false)
+  
+      stopCameraStream()
+  
+      await new Promise((resolve) => setTimeout(resolve, 300))
+  
+      await startCameraStream()
+  
+      // 必要なら自動スキャン復帰
+      setScanMode('auto')
+      setAutoEnabled(true)
+    } catch (err) {
+      console.error(err)
+      setError('カメラのリセットに失敗しました')
+    } finally {
+      setIsResetting(false)
+    }
+  }
+  
+  const clearAutoScanTimer = () => {
+    if (autoScanTimeoutRef.current) {
+      clearTimeout(autoScanTimeoutRef.current)
+      autoScanTimeoutRef.current = null
+    }
+  }
+
+  const sendMeasurementLog = async (
+    result: string,
+    recognizedModelNumber?: string
+  ) => {
+    const metrics = scanMetricsRef.current
+  
+    const response = await fetch('/api/measurement-logs', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        result,
+        recognizedModelNumber,
+        metrics: {
+          t1Ms: metrics.t1ImageProcessingMs,
+          t2Ms: metrics.t2OcrMs,
+          t3Ms: metrics.t3ModelNumberProcessingMs,
+          t4Ms: metrics.t4GoApiRoundTripMs,
+          t7Ms: metrics.t7SearchFeatureMs,
+          t8Ms: metrics.t8UserPerceivedMs,
+        },
+      }),
+    })
+  
+    if (!response.ok) {
+      throw new Error(`measurement log failed: ${response.status}`)
+    }
+  }
+  
   return (
     <div className="bg-white">
       <div className="relative w-full overflow-hidden bg-black">
+      <div
+        ref={viewportRef}
+        className="relative mx-auto h-[calc(100vh-164px)] w-full max-w-xl overflow-hidden bg-black touch-none"
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      >
+        {/* 背景カメラ */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="absolute inset-0 h-full w-full object-cover"
+          style={{
+            transform: `scale(${zoom})`,
+            filter: `brightness(${brightness}%)`,
+            transformOrigin: 'center center',
+          }}
+        />
+
+        {/* 外側ぼかし */}
         <div
-            ref={viewportRef}
-            className="relative mx-auto h-[calc(100vh-164px)] w-full max-w-xl bg-black touch-none"
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
+          className="absolute pointer-events-none backdrop-blur-md bg-black/20"
+          style={{
+            left: 0,
+            top: 0,
+            width: '100%',
+            height: `${cardFrameRect.yRatio * 100}%`,
+          }}
+        />
+        <div
+          className="absolute pointer-events-none backdrop-blur-md bg-black/20"
+          style={{
+            left: 0,
+            top: `${cardFrameRect.yRatio * 100}%`,
+            width: `${cardFrameRect.xRatio * 100}%`,
+            height: `${cardFrameRect.heightRatio * 100}%`,
+          }}
+        />
+        <div
+          className="absolute pointer-events-none backdrop-blur-md bg-black/20"
+          style={{
+            left: `${(cardFrameRect.xRatio + cardFrameRect.widthRatio) * 100}%`,
+            top: `${cardFrameRect.yRatio * 100}%`,
+            width: `${(1 - cardFrameRect.xRatio - cardFrameRect.widthRatio) * 100}%`,
+            height: `${cardFrameRect.heightRatio * 100}%`,
+          }}
+        />
+        <div
+          className="absolute pointer-events-none backdrop-blur-md bg-black/20"
+          style={{
+            left: 0,
+            top: `${(cardFrameRect.yRatio + cardFrameRect.heightRatio) * 100}%`,
+            width: '100%',
+            height: `${(1 - cardFrameRect.yRatio - cardFrameRect.heightRatio) * 100}%`,
+          }}
+        />
+
+
+        {/* 外側暗めオーバーレイ */}
+        <div className="pointer-events-none absolute inset-0 z-5 bg-black/30" />
+
+        {/* 履歴パネル */}
+        <div
+          className={`
+            absolute top-0 left-14 right-0 z-30 px-4 pt-3 
+            transition-transform duration-300 ease-in-out
+            ${showHistoryPanel && historyItems.length > 0 ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0'}
+          `}
         >
-            <div
-            className={`
-                absolute top-0 left-0 right-0 z-20 pl-18 pr-2 pt-2
-                transition-transform duration-300 ease-in-out
-                ${showHistoryPanel && historyItems.length > 0 ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0'}
-            `}
-            >
-            {historyItems.length > 0 && (
-                <div className="overflow-x-auto">
-                <div className="flex w-max gap-2 pb-2">
-                    {historyItems.map((item) => (
-                    <div
-                        key={`${item.modelNumber}-${item.scannedAt}`}
-                        className="min-w-[260px] max-w-[260px] shrink-0 rounded-xl border border-gray-200 bg-white/95 p-2 shadow-xl backdrop-blur-sm"
-                    >
-                        <div className="flex h-full flex-col justify-between">
-                            <div>
-                                <p className="line-clamp-2 text-sm font-bold text-gray-900">
-                                {item.itemName}
-                                </p>
-
-                                <div className="mt-1 space-y-1 text-[10px] text-gray-600">
-                                <p>
-                                    <span className="font-medium text-gray-800">型番:</span>{' '}
-                                    {item.modelNumber}
-                                </p>
-                            </div>
-                        </div>
-
-                        <div className="flex items-center justify-between rounded-xl bg-blue-50 px-2 py-[2px]">
-                            <div>
-                                <p className="text-[8px] text-gray-800 font-semibold tracking-wide text-blue-600">
-                                中古相場
-                                </p>
-
-                                <p className="text-xl font-bold text-blue-700">
-                                {item.marketPrice != null ? `${item.marketPrice}円` : '不明'}
-                                </p>
-                            </div>
-
-                            <a
-                                href={`https://jp.mercari.com/search?keyword=${encodeURIComponent(item.itemName)}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="shrink-0 rounded-lg bg-red-500 px-3 py-2 text-xs font-semibold text-white transition hover:bg-red-600"
-                            >
-                                メルカリで見る
-                            </a>
-
-                            </div>
-                        {/* <p>
-                            <span className="font-medium text-gray-800">読取時刻:</span>{' '}
-                            {new Date(item.scannedAt).toLocaleString('ja-JP')}
-                        </p> */}
-                        </div>
-                    </div>
-                    ))}
-                </div>
-                </div>
-            )}
-            </div>
-            
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            onLoadedMetadata={() => drawCropPreview()}
-            className="absolute inset-0 h-full w-full object-cover"
-            style={{
-                transform: `scale(${zoom})`,
-                transformOrigin: 'center center',
-                filter: `brightness(${brightness}%)`,
-            }}
-         />
-            <div className="absolute top-3 left-3 z-30 flex flex-col gap-6">
-                {/* 履歴開閉 */}
-                <button
-                type="button"
-                onClick={() => setShowHistoryPanel((prev) => !prev)}
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/70 text-white shadow-lg backdrop-blur-sm transition hover:bg-black/80"
-                >
-                {showHistoryPanel ? <X size={22} /> : <History size={22} />}
-                </button>
-
-                {/* 履歴削除 */}
-                {showHistoryPanel && historyItems.length > 0 && (
-                <button
-                    type="button"
-                    onClick={clearScanHistory}
-                    className="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/90 text-white shadow-lg backdrop-blur-sm transition hover:bg-red-600"
-                    aria-label="履歴削除"
-                >
-                    <Trash2 size={20} />
-                </button>
-                )}
-            </div>
-
-            {/* 読み取り枠ブロック*/}
-            <div
-                className={`
-                    pointer-events-none absolute rounded-lg border-4 transition-all duration-300
-                    ${
-                    scanStatus === 'success'
-                        ? 'border-green-400 shadow-[0_0_20px_rgba(74,222,128,0.8)]'
-                        : scanStatus === 'error'
-                        ? 'border-red-400 shadow-[0_0_20px_rgba(248,113,113,0.8)]'
-                        : 'border-cyan-400 shadow-[0_0_20px_rgba(34,211,238,0.5)]'
-                    }
-                `}
-                style={{
-                    left: `${cropRect.xRatio * 100}%`,
-                    top: `${cropRect.yRatio * 100}%`,
-                    width: `${cropRect.widthRatio * 100}%`,
-                    height: `${cropRect.heightRatio * 100}%`,
-                }}
-            />
-            {/* エラー表示とスキャンボタンブロック */}
-            <div className="absolute bottom-10 left-0 right-0 z-10 px-4">
-
-                {error && (
-                <div className="flex justify-center">
-                    <p className="px-4 py-2 text-sm font-semibold text-red-500">
-                    {error}
+          {historyItems.length > 0 && (
+            <div className="overflow-x-auto">
+              <div className="flex w-max gap-2 pb-2 h-26">
+                {historyItems.map((item) => (
+                  <div
+                    key={`${item.modelNumber}-${item.scannedAt}`}
+                    className="min-w-[250px] max-w-[250px] shrink-0 rounded-xl border border-gray-200 bg-white/95 p-2 shadow-xl backdrop-blur-sm"
+                  >
+                    <p className="line-clamp-2 min-h-[2rem] text-xs font-bold leading-4 text-gray-900">
+                      {item.itemName}
                     </p>
-                </div>
-                )}
 
-                <div className="flex justify-center">
-                    
-                {scanMode === 'manual' && (
-                  <button onClick={handleScan}>スキャン</button>
-                )}
-
-                {scanMode === 'auto' && (
-                  <button onClick={() => setAutoEnabled(prev => !prev)}>
-                    {autoEnabled ? '停止' : '自動スキャン開始'}
-                  </button>
-                )}
-                </div>
-
-            </div>
-
-            {/* 明るさ調整ブロック */}
-            <div className="absolute bottom-10 right-6 z-20 flex flex-col items-center gap-3">
-                {showBrightnessControl && (
-                    <div className="flex h-44 w-14 items-center justify-center rounded-2xl bg-black/60 backdrop-blur-sm">
-                    <input
-                        type="range"
-                        min={50}
-                        max={180}
-                        step={1}
-                        value={brightness}
-                        onChange={(e) => setBrightness(Number(e.target.value))}
-                        className="h-32 w-32 cursor-pointer accent-yellow-400"
-                        style={{
-                        transform: 'rotate(-90deg)',
-                        }}
-                        aria-label="明るさ調整"
-                    />
+                    <div className="mt-0 text-[8px] text-gray-600">
+                      <p>
+                        <span className="font-medium text-gray-800">型番:</span>{' '}
+                        {item.modelNumber}
+                      </p>
                     </div>
-                )}
 
-                <button
-                    type="button"
-                    onClick={() => setShowBrightnessControl((prev) => !prev)}
-                    className="flex h-14 w-14 items-center justify-center rounded-full bg-black/70 text-white shadow-lg backdrop-blur-sm transition hover:bg-black/80"
-                    aria-label="明るさ調整を開く"
-                >
-                    {showBrightnessControl ? <X size={22} /> : <Sun size={22} />}
-                </button>
-            </div>
+                    <div className="mt-0 flex items-center justify-between rounded-xl bg-blue-50 px-2 py-[2px]">
+                      <div>
+                        <p className="text-[6px] font-semibold tracking-wide text-blue-600">
+                          中古相場
+                        </p>
+                        <p className="text-md font-bold text-blue-700">
+                          {item.marketPrice != null ? `${item.marketPrice}円` : '不明'}
+                        </p>
+                      </div>
 
-          {isProUser && (
-            <div className="absolute bottom-30 right-6 z-20">
-              <button
-                onClick={() =>
-                  setScanMode(scanMode === 'auto' ? 'manual' : 'auto')
-                }
-                className="px-4 py-2 rounded bg-blue-600 text-white"
-              >
-                {scanMode === 'auto' ? '自動' : '手動'}
-              </button>
+                      <a
+                        href={`https://jp.mercari.com/search?keyword=${encodeURIComponent(item.itemName)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 rounded-lg bg-red-500 px-2 py-2 text-xs font-semibold text-white transition hover:bg-red-600"
+                      >
+                        メルカリ
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
-
         </div>
+
+        {/* 左上ボタン群 */}
+        <div className="absolute top-2 left-2 z-40 flex flex-col gap-3">
+          <button
+            type="button"
+            onClick={() => setShowHistoryPanel((prev) => !prev)}
+            className="flex h-11 w-11 items-center justify-center rounded-full bg-black/60 text-white shadow-lg backdrop-blur-md"
+          >
+            {showHistoryPanel ? <X size={22} /> : <History size={22} />}
+          </button>
+
+          {showHistoryPanel && historyItems.length > 0 && (
+            <button
+              type="button"
+              onClick={clearScanHistory}
+              className="flex h-11 w-11 items-center justify-center rounded-full bg-red-500/90 text-white shadow-lg backdrop-blur-md"
+            >
+              <Trash2 size={20} />
+            </button>
+          )}
+        </div>
+
+        {/* 自動スキャン状態 */}
+        {scanMode === 'auto' && (
+          <div className="absolute left-1/2 top-20 z-40 -translate-x-1/2">
+            <div className="rounded-full bg-black/55 px-5 py-3 text-white shadow-lg backdrop-blur-md">
+              <div className="flex items-center gap-3 text-lg font-semibold">
+                <span>自動スキャン中</span>
+                <span className="h-2.5 w-2.5 rounded-full bg-green-400" />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 説明文：枠の真上 */}
+        <div
+          className="absolute left-1/2 z-30 -translate-x-1/2 -translate-y-full"
+          style={{
+            top: `calc(${cardFrameRect.yRatio * 100}% - 4px)`,
+          }}
+        >
+          <div className="w-75 rounded-xl bg-black/50 px-2 py-2 text-center text-white shadow-lg backdrop-blur-md">
+            <p className="text-[10px] font-semibold">
+              DSソフトの右下の型番を枠の中に合わせてください
+            </p>
+          </div>
+        </div>
+
+        {/* 読み取り枠 */}
+        <div
+          className={`
+            pointer-events-none absolute z-20 rounded-[10px] border-[5px] transition-all duration-300
+            ${
+              scanStatus === 'success'
+                ? 'border-green-400 shadow-[0_0_24px_rgba(74,222,128,0.7)]'
+                : scanStatus === 'error'
+                ? 'border-red-400 shadow-[0_0_24px_rgba(248,113,113,0.7)]'
+                : 'border-white shadow-[0_0_20px_rgba(255,255,255,0.28)]'
+            }
+          `}
+          style={{
+            left: `${cardFrameRect.xRatio * 100}%`,
+            top: `${cardFrameRect.yRatio * 100}%`,
+            width: `${cardFrameRect.widthRatio * 100}%`,
+            height: `${cardFrameRect.heightRatio * 100}%`,
+          }}
+        >
+          <div
+            className="absolute rounded-md border-2 border-dashed border-white/90 bg-black/10"
+            style={{
+              left: `${modelAreaRect.xRatioInFrame * 100}%`,
+              top: `${modelAreaRect.yRatioInFrame * 100}%`,
+              width: `${modelAreaRect.widthRatioInFrame * 100}%`,
+              height: `${modelAreaRect.heightRatioInFrame * 100}%`,
+            }}
+          />
+
+          <div
+            className="absolute text-[10px] font-semibold text-white drop-shadow"
+            style={{
+              left: `${modelAreaRect.xRatioInFrame * 100}%`,
+              top: `calc(${modelAreaRect.yRatioInFrame * 100}% - 16px)`,
+            }}
+          >
+            型番
+          </div>
+        </div>
+
+
+
+        {/* エラー */}
+        {error && (
+          <div className="absolute bottom-28 left-1/2 z-30 w-[88%] -translate-x-1/2">
+            <p className="text-center text-sm font-semibold text-red-300 drop-shadow">
+              {error}
+            </p>
+          </div>
+        )}
+
+        {/* 左下 */}
+        <div className="absolute bottom-12 left-20 z-40 flex flex-col items-center gap-3">
+            {showBrightnessControl && (
+              <div className="flex h-44 w-10 items-center justify-center rounded-2xl bg-black/60 backdrop-blur-sm">
+                <input
+                  type="range"
+                  min={50}
+                  max={180}
+                  step={1}
+                  value={brightness}
+                  onChange={(e) => setBrightness(Number(e.target.value))}
+                  className="h-32 w-32 cursor-pointer accent-yellow-400"
+                  style={{ transform: 'rotate(-90deg)' }}
+                  aria-label="明るさ調整"
+                />
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowBrightnessControl((prev) => !prev)}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-black/55 text-white shadow-lg backdrop-blur-md"
+              aria-label="明るさ調整を開く"
+            >
+              {showBrightnessControl ? <X size={18} /> : <Sun size={18} />}
+            </button>
+
+          </div>
+
+
+
+        {/* 右下コントロール */}
+        <div className="absolute bottom-8 right-2 z-40 flex flex-col items-center gap-3">
+
+
+          {isProUser && (
+              <button
+                onClick={() => setScanMode(scanMode === 'auto' ? 'manual' : 'auto')}
+                className="w-28 rounded-full bg-white/20 px-2 py-2 text-xs font-semibold text-white backdrop-blur-md"
+              >
+                {scanMode === 'auto' ? '手動に切替' : '自動に切替'}
+              </button>
+            )}
+
+          <button
+            type="button"
+            onClick={handleResetCamera}
+            disabled={isResetting}
+            className="w-28 rounded-full bg-white/20 px-2 py-2 text-xs font-semibold text-white backdrop-blur-md"
+          >
+            {isResetting ? '再起動中...' : 'カメラ再起動'}
+          </button>
+        </div>
+
+        {/* 下部中央ボタン */}
+        <div className="absolute bottom-12 left-1/2 z-40 -translate-x-1/2">
+          <div className="flex flex-col items-center gap-2">
+            {scanMode === 'manual' ? (
+              <button
+                onClick={handleScan}
+                className="rounded-full bg-white/90 px-8 py-3 text-base font-bold text-gray-900 shadow-lg"
+              >
+                スキャン
+              </button>
+            ) : (
+              <button
+                onClick={() => setAutoEnabled((prev) => !prev)}
+                className="rounded-full bg-black/55 px-8 py-3 text-base font-bold text-white shadow-lg backdrop-blur-md"
+              >
+                {autoEnabled ? '自動停止' : '自動開始'}
+              </button>
+            )}
+
+
+          </div>
+        </div>
+      </div>
       </div>
   
       <div className="mx-auto max-w-xl rounded-t-3xl bg-white p-1">
