@@ -4,6 +4,7 @@ type MeasurementLogRequest = {
   trialId?: string
   recognizedModelNumber?: string
   result: string
+  completedAt?: string
   metrics: {
     t1Ms?: number
     t2Ms?: number
@@ -34,6 +35,7 @@ export async function POST(request: NextRequest) {
         `T4_ms=${formatMs(metrics.t4Ms)}`,
         `T7_ms=${formatMs(metrics.t7Ms)}`,
         `T8_ms=${formatMs(metrics.t8Ms)}`,
+        `completed_at=${body.completedAt ?? '-'}`,
       ].join(' ')
     )
 

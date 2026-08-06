@@ -399,12 +399,15 @@ export default function OcrScanner() {
       requestAnimationFrame(() => {
         if (t8StartRef.current === null) return
   
+        const completedAt = new Date()
         const t8 = performance.now() - t8StartRef.current
+
         scanMetricsRef.current.t8UserPerceivedMs = t8
   
         void sendMeasurementLog(
           'success',
-          measuredModelNumberRef.current
+          measuredModelNumberRef.current,
+          completedAt.toISOString()
         ).catch((error) => {
           console.error('計測ログの送信に失敗しました', error)
         })
@@ -806,7 +809,8 @@ export default function OcrScanner() {
 
   const sendMeasurementLog = async (
     result: string,
-    recognizedModelNumber?: string
+    recognizedModelNumber?: string,
+    completedAt?: string
   ) => {
     const metrics = scanMetricsRef.current
   
@@ -826,6 +830,7 @@ export default function OcrScanner() {
           t7Ms: metrics.t7SearchFeatureMs,
           t8Ms: metrics.t8UserPerceivedMs,
         },
+        completedAt,
       }),
     })
   
