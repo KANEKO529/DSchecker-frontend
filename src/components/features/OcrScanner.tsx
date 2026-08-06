@@ -573,9 +573,14 @@ export default function OcrScanner() {
     }
   }
   const handleScan = async () => {
+    if (isScanning) return
+
     // T8：スキャンボタン押下時点
     t8StartRef.current = performance.now()
     scanMetricsRef.current = {}
+
+    // ボタンを押した直後にローディング状態へ変更
+    setIsScanning(true)
 
     try {
       const token = await getToken({ skipCache: true })
@@ -584,7 +589,6 @@ export default function OcrScanner() {
       const t7StartedAt = performance.now()
   
       setScanStatus('idle')
-      setIsScanning(true)
       setError('')
       setRecognizedText('')
       setSearchResult(null)
@@ -1116,9 +1120,26 @@ export default function OcrScanner() {
             {scanMode === 'manual' ? (
               <button
                 onClick={handleScan}
-                className="rounded-full bg-white/90 px-8 py-3 text-base font-bold text-gray-900 shadow-lg"
+                disabled={isScanning}
+                aria-busy={isScanning}
+                className="
+                  flex min-w-[140px] items-center justify-center gap-2
+                  rounded-full bg-white/90 px-8 py-3
+                  text-base font-bold text-gray-900 shadow-lg
+                  disabled:cursor-not-allowed disabled:opacity-70
+                "
               >
-                スキャン
+                {isScanning && (
+                  <span
+                    className="
+                      h-5 w-5 animate-spin rounded-full
+                      border-2 border-gray-400 border-t-gray-900
+                    "
+                    aria-hidden="true"
+                  />
+                )}
+
+                <span>{isScanning ? '' : 'スキャン'}</span>
               </button>
             ) : (
               <button
@@ -1128,8 +1149,6 @@ export default function OcrScanner() {
                 {autoEnabled ? '自動停止' : '自動開始'}
               </button>
             )}
-
-
           </div>
         </div>
       </div>
